@@ -37,6 +37,16 @@ dependencies:
   http: 1.6.0
   flutter_secure_storage: 11.2.0
   url_launcher: 6.3.3
+  geolocator: ^14.0.2
+  file_picker: ^12.0.0
+  flutter_map: 8.3.2
+  flutter_map_cache: 2.1.0
+  http_cache_file_store: 2.0.2
+  path_provider: 2.1.6
+  latlong2: 0.10.1
+  flutter_local_notifications: 19.5.0
+  timezone: 0.10.1
+  flutter_timezone: 5.1.0
 
 dev_dependencies:
   flutter_test:
@@ -59,6 +69,20 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/illustrations/
+
+  fonts:
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/Poppins-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Poppins-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Poppins-Bold.ttf
+          weight: 700
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -123,3 +123,114 @@ The Figma page has more visual detail than the implemented Flutter screens. News
 - Figma metadata for 22 top-level frames was inspected. The context request timed out; node `383:378` is an emergency services frame, and no dedicated risk/family top-level frames were returned. Full Figma parity remains outstanding.
 - Final checks: `flutter pub get` succeeded; analyzer clean; **7 Flutter tests passed**; debug APK built (185,683,103 bytes) and installed/launched on API 37 emulator. Home, Weather detail, More, Donation, and Family empty state were visually checked; no assertion/fatal log on Family navigation.
 - No Laravel source or database changes in this phase; previous backend verification remains 28 tests / 172 assertions. No authenticated write was made.
+
+## Phase 7 — local API and Flutter regression — 2 November 2026
+
+- Read-only repository check before edits: mobile `main` at `c962ef9`, clean; backend `feature/perbaikan-api`, two commits ahead of origin, clean. No pull/merge was performed.
+- Started Laravel using `php artisan serve --host=0.0.0.0 --port=8000`. Local API and host LAN address `192.168.1.9:8000` both answered. Public `/api/home`, `/api/weather-forecast`, `/api/news`, and `/api/shelters?q=Kuranji` returned 200 with `data_type=simulation` in this session. Guest requests to `/api/reports`, `/api/user`, and `/api/family-groups` returned 401 as expected; no write endpoints were called.
+- `flutter pub get` restored packages from the existing pubspec/lockfile; it did not upgrade constraints. Initial analyzer output exposed invalid `double.fromEnvironment` calls for default map coordinates. Replaced them with string compile-time environment values parsed defensively while retaining the same Padang defaults and visual behavior.
+- Updated Family widget-test HTTP fixtures to return the empty `GET /family-memberships` response now required by `FamilyPage`. This fixed five stale-fixture failures without changing Family application behavior.
+- Regression: 12 Flutter tests passed. Analyzer reported no errors and two informational lints (deprecated `DropdownButtonFormField.value`, and braces around one `if`); these are not runtime errors. Standard Flutter APK build failed closing Kotlin incremental caches because the Pub cache is on `C:` while the mobile workspace is on `D:`. Direct Gradle `assembleDebug` with Kotlin incremental compilation disabled succeeded. APK built with API base `http://192.168.1.9:8000/api` (185,650,376 bytes).
+- Physical RMX2001 is currently reported by ADB as `unauthorized`; its RSA debugging authorization has not been accepted in this session. Therefore the just-built APK has not been installed/launched on the physical phone, and no physical-device API, login, profile, GPS, upload, reports/history, or Family flow is claimed as tested here. No credentials were available; no registration/login or authenticated writes were attempted.
+- No Laravel source, migration, or database data was changed. UI palette, typography, icons, navigation, and layout were not redesigned in this phase.
+
+### Next physical-device checkpoint
+
+Unlock the RMX2001 and accept its Android USB debugging authorization prompt (select “Always allow from this computer” only if appropriate). Then confirm ADB reports the device as `device`; after that install the generated APK, open it, and verify public Home/News/Shelter/API states before any authorized-account flows.
+## Phase 8 — RMX2001 physical QA follow-up — 2 November 2026
+
+- This section supersedes Phase 7's initial `unauthorized` device status. User approved USB debugging; ADB now identified `4PJNUSZ5G6TSZD6T` as RMX2001. Current APK installed and opened.
+- The PC Wi-Fi profile is `Public`. Despite the device and PC being on `192.168.1.0/24`, direct HTTP from the phone to the PC timed out. No firewall/profile setting was changed. A temporary USB tunnel `adb reverse tcp:8000 tcp:8000` allowed the app to reach Laravel; the APK was built with QA base `http://127.0.0.1:8000/api`. GET requests from the app to `/api/home`, `/api/news`, and `/api/shelters` appeared in the Laravel server log.
+- On-device screens reviewed: Home, News, Maps/Shelter, Report form, More, Weather detail, and guest Family/login gate. Home weather used the clearly labeled local simulation fallback; warning stayed unknown; statistics/news/shelters remained labeled demonstration/training. OSM basemap rendered, but shelter points are simulation and no route is represented as safe.
+- Report GPS control successfully populated current device coordinates after granting location while in use. The coordinates were not submitted and the screenshot containing them was deleted. Android file picker opened from the attachment button; no item was chosen and no upload occurred. Report submit/history and profile/Family management remain behind authenticated account access.
+- Guest API checks for reports/user/family groups returned 401. No valid test credentials were available. Login, token persistence, profile, report POST, attachment upload, report history, and authenticated Family CRUD/check-in/reminders/invitations remain unverified end-to-end.
+- Laravel suite initially failed 2 of 30 tests due cached auth guards in test setup while switching bearer tokens. Added `Auth::forgetGuards()` before changing test identities; full suite then passed **30 tests / 209 assertions** on in-memory SQLite. Flutter `flutter test --no-pub` passed **12 tests**. Final `flutter analyze --no-pub` completed with no issues after replacing the deprecated dropdown initializer. The standard Flutter APK command hit cross-drive Kotlin incremental cache closure errors; direct Gradle build with incremental compilation disabled succeeded and APK was installed.
+- Database MySQL was not modified; no migration or write endpoint was run. Design/theme/layout were kept intact.
+
+### Remaining device checkpoint
+
+- For direct Wi-Fi API testing, Windows currently classifies the Wi-Fi network as Public. A narrow inbound firewall exception or changing the trusted network profile would be required; neither was changed. USB reverse can continue to be used for QA.
+- Account-backed device flows require an authorized test account. No test account was created or inferred from existing phone/device data.
+
+- Final post-lint rebuild: analyzer clean, 12/12 Flutter tests pass; APK **185,653,984 bytes** rebuilt and installed/launched on RMX2001 at 17:01 local. Home API GETs were logged by Laravel through the active USB reverse tunnel.
+
+## Phase 9 — QA akun lokal: autentikasi API — 2 November 2026
+
+- Dengan persetujuan pengguna, dibuat satu akun dummy QA pada MySQL lokal backend yang sudah diverifikasi (127.0.0.1:3306, database siaganow). Kredensial hanya disampaikan melalui percakapan, tidak disimpan di repo; akun tidak dihapus.
+- API Laravel diuji langsung: login berhasil, GET /api/user mengembalikan profil akun QA, logout mencabut token, dan token yang dicabut ditolak 401. Tidak ada migration atau perubahan skema.
+- Login Flutter pada RMX2001, pemulihan sesi, tampilan profil, dan logout belum diuji di perangkat karena ADB melaporkan perangkat unauthorized pada host ini. Setelah USB debugging diizinkan kembali, lanjutkan USB reverse ke Laravel port 8000 dan uji alur pada APK yang terpasang. Password tidak dicatat di dokumentasi.
+
+## Phase 10 — autentikasi end-to-end RMX2001 — 2 November 2026
+
+- Setelah pengguna mengizinkan USB debugging, perangkat kembali tersambung. USB reverse port 8000 menghubungkan APK yang telah terpasang ke Laravel lokal.
+- Login dengan akun QA berhasil. Laravel mencatat POST /api/login dan GET /api/user. Halaman Profil pada perangkat menampilkan nama, email, dan nomor HP akun.
+- Aplikasi di-force-stop dan dibuka kembali tanpa menghapus data aplikasi; sesi dipulihkan, home menunjukkan status masuk, dan Laravel mencatat GET /api/user saat restore.
+- Logout berhasil dan aplikasi kembali ke tampilan tamu. Baris token Sanctum akun QA berubah dari satu menjadi nol. Setelah aplikasi dibuka ulang, status tetap tamu. GET /api/user tanpa token menghasilkan 401; uji API dengan token revoked juga menghasilkan 401.
+- Tidak ada perubahan source Flutter, backend, skema, atau migration untuk QA ini. Profil hanya didukung baca; GET /api/user tersedia, sedangkan endpoint update tidak ada dan tombol edit menyatakan fitur tersebut belum tersedia. Kredensial tidak dicatat di file progres; akun QA tetap dipertahankan.
+- Berikutnya: audit alur formulir laporan dan riwayat. Jangan membuat laporan bencana fiktif sebagai bagian dari uji end-to-end; submit perlu kejadian nyata yang disediakan pengguna atau persetujuan terpisah untuk record QA yang jelas ditandai.
+
+## Phase 11 — form laporan: validasi dan pemeriksaan RMX2001 — 2 November 2026
+
+- Pada APK di RMX2001, form guest diperiksa: koordinat tidak diprefill; validasi kosong menandai judul, kedua koordinat, dan deskripsi; form tetap guest dan tidak membuat permintaan submit. Jumlah disaster_reports untuk akun QA tetap nol.
+- Screenshot menunjukkan pesan batas koordinat terpotong satu baris. Input form kini mengatur errorMaxLines menjadi 2 agar teks penuh terlihat; identitas visual dan layout normal tidak diubah. APK debug terbaru dibangun memakai Gradle dengan Kotlin incremental off (Flutter CLI build masih terkena masalah cache lintas-drive), dipasang dengan install replace yang mempertahankan data, dan hasil pesan lengkap diverifikasi di HP.
+- Tes: flutter analyze bersih, flutter test seluruh **13 tes lulus**, termasuk tes widget baru untuk pesan validasi dan mencegah login/pengiriman ketika guest. git diff --check bersih.
+- API Laravel MobileApiTest sebelumnya lulus **8 tes / 40 assertion** di test SQLite, termasuk kepemilikan riwayat serta validasi lampiran. Tidak ada laporan fiktif dibuat pada database lokal. Pengiriman laporan/upload Flutter masih menunggu kejadian nyata yang disediakan pengguna atau persetujuan terpisah untuk record QA yang jelas ditandai.
+- Berikutnya: uji riwayat laporan akun kosong (read-only), lalu lanjutkan shelter/peta atau fitur akun sesuai dukungan endpoint yang tersedia. Jangan menyimpan laporan simulasi sebagai kejadian nyata.
+
+## Phase 12 — riwayat laporan autentikasi di perangkat — 2 November 2026
+
+- Setelah perbaikan validasi, login ulang pada RMX2001 berhasil. Endpoint GET /api/reports dipanggil oleh aplikasi; riwayat akun QA kosong dan UI menampilkan empty state yang benar.
+- Logout dilakukan lagi setelah pemeriksaan. MySQL lokal akhir: nol laporan milik akun QA dan nol personal access token QA. Akun QA dummy tetap dipertahankan sesuai persetujuan pengguna.
+- Submit multipart dan lampiran tidak dikirim karena tidak ada kejadian nyata untuk dilaporkan; API backend tetap memiliki tes terisolasi untuk penyimpanan, validasi MIME, batas dan ownership. End-to-end unggah lewat HP masih belum terverifikasi.
+- Tahap laporan yang dapat diuji tanpa merekayasa kejadian selesai: autentikasi, validasi lokal, riwayat kosong. Berikutnya audit fitur shelter/peta atau Family Siaga yang sudah punya API; data kejadian hanya diuji kirim dengan detail nyata atau persetujuan khusus.
+
+## Phase 13 — kontrak multipart laporan (mocked) — 2 November 2026
+
+- Ditambahkan tes ApiService.uploadReport dengan MockClient untuk memverifikasi Bearer Authorization, multipart/form-data boundary, field laporan yang diserialisasi, serta evidence[]/filename. Respons dibuat oleh mock; tidak ada request ke Laravel dan tidak ada record database.
+- Flutter analyze tetap bersih; seluruh **14 tes Flutter** lulus.
+
+## Phase 14 — Family Siaga read-only QA pada RMX2001 — 2 November 2026
+
+- Login QA pada HP memuat GET /api/family-groups dan GET /api/family-memberships; layar menampilkan empty state grup dengan jelas. Tidak menekan Buat grup atau Gabung, dan tidak membuat anggota, undangan, check-in, atau pengingat.
+- Logout sukses setelah pemeriksaan. Database akhir untuk akun QA tetap kosong: 0 family groups, 0 family members, 0 reports, 0 personal access tokens. Akun tidak dihapus.
+- Laravel MobileFamilyRiskApiTest lulus **7 tes / 71 assertion** di database test. Uji CRUD keluarga di perangkat belum dilakukan karena akan menulis data keluarga contoh ke MySQL lokal; minta izin khusus jika perlu end-to-end mutasi.
+
+## Phase 15 — konten demo cuaca/berita dan foto ilustrasi — 2 November 2026
+
+- Tema, warna, Poppins, ikon, layout, dan navigasi dipertahankan. Flutter memetakan `image_key` API ke dua aset lokal; layar detail menampilkan caption lokasi asal serta kredit foto.
+- Aset Unsplash yang telah diperiksa secara visual dan dioptimalkan melalui CDN ke JPEG 1000 px: Iqro Rinaldi, [foto banjir Rawa Jati/Jakarta (4 Maret 2025)](https://unsplash.com/photos/flooding-submerges-houses-people-gather-to-seek-shelter-L0MwD0NcZEk), 172,755 byte; Justin Hu, [pegunungan berhutan Tahiti setelah hujan](https://unsplash.com/photos/a-lush-green-mountain-covered-in-clouds-and-trees-Y0Vaj15OE5s), 155,737 byte. Keduanya berlisensi Unsplash. Foto banjir bukan kejadian Sumatera Barat; foto Tahiti hanya ilustrasi alam, bukan peta/rute/zona risiko.
+- API `news` berisi tiga materi edukasi/skenario, semuanya tetap bertipe simulasi pada tingkat respons dan item. Tidak ada transaksi atau data kejadian nyata yang dibuat. Atribusi dan konteks disimpan di backend `config/siaganow.php`.
+- Fallback BMKG tetap mempertahankan permintaan aktual. Bila gagal dan Mode Demo aktif, API menyajikan kondisi saat ini dan tiga interval cuaca simulasi; nilai kelembapan adalah kelembapan udara, humidity soil tidak diada-adakan. Status `simulation/fallback` dan pesan kegagalan BMKG tetap disertakan.
+- Verifikasi backend: `php -l` dua file lulus; `BmkgForecastTest` dan `DemoNewsTest` lulus **5 tes / 33 assertion**. Endpoint lokal `/api/home` dan `/api/news` menjawab 200; home memiliki tiga interval prakiraan simulasi, berita bertipe simulasi.
+- Verifikasi Flutter: `flutter test` **14 lulus**; analyzer menyisakan satu info lint lama pada `lib/main.dart:3197` (kurung kurawal pada if, di luar perubahan ini). APK debug berhasil dibangun dengan Gradle workaround Kotlin cache; kedua foto terverifikasi ada di asset bundle APK (masing-masing 172,755 dan 155,737 byte). Screenshot RMX2001 pada layar Berita memperlihatkan materi simulasi dan foto ilustrasi. Regresi Laravel lengkap: **32 tes / 221 assertion lulus**.
+- Catatan insiden instalasi: `flutter install` gagal karena mencari `app-release.apk` yang tidak tersedia dan secara tidak terduga menghapus paket lama sebelum gagal. Pemeriksaan ADB memastikan paket lama sudah hilang; APK debug kemudian dipasang kembali dengan ADB, diluncurkan, dan USB reverse terverifikasi aktif. Akibatnya penyimpanan privat aplikasi lokal dari instalasi lama (termasuk preferensi lokal) hilang dan tidak dapat dipulihkan. Saat itu sesi akun QA telah logout; uji Phase 14 mencatat nol token/laporan/grup/anggota, dan tidak ada data backend yang dihapus/diubah pada tahap ini. Kejadian ini dicatat sebagai kesalahan operasional.
+- Pemeriksaan visual RMX2001: setelah aplikasi diberi waktu memuat dan dibuka ulang, Beranda menampilkan foto berita dari API dengan label “BERITA · SIMULASI”, status peringatan “belum diketahui”, cuaca contoh 28°C, kelembapan udara, statistik bertanda latihan, serta materi prakiraan contoh. Screenshot Beranda tersimpan di workspace Codex untuk pemeriksaan tahap ini.
+- Belum diuji secara visual: tab daftar Berita dan layar detail/kredit foto pada RMX2001. Akses runtime ke feed cuaca BMKG aktual masih gagal di lingkungan ini; fallback simulasi aktif dan label/statusnya jujur. Endpoint lokal `/api/home` serta `/api/news` merespons 200 dari host; kartu Beranda pada perangkat memuat konten API setelah request selesai.
+
+## Phase 16 — logo website pada header mobile — 2 November 2026
+
+- Menyalin aset website `public/images/siaganow-nature-emblem.png` apa adanya ke `assets/images/siaganow-nature-emblem.png` (384×256, 62,384 byte). Ikon shield placeholder di header diganti `Image.asset` berlabel aksesibel, ukuran 68×45 dan `BoxFit.contain`; warna, font, layout lain, dan navigasi tetap.
+- Analyzer melaporkan satu info lint yang sudah ada terkait braces pada `lib/main.dart`; seluruh **14 tes Flutter lulus**. Build APK debug berhasil dengan workaround Gradle/Kotlin yang pernah digunakan sebelumnya. APK dipasang menggunakan `adb install -r` dan RMX2001 tetap membuka Beranda; screenshot logo diperiksa secara visual.
+- Database Imam diperiksa melalui database review sementara terisolasi, dibandingkan dengan DB MySQL aktif, lalu database review dihapus. Tidak ada database utama yang diubah dan tidak ada data akun/token/laporan/keluarga/risk/warning yang dipindahkan; temuan lengkap dicatat pada `IMPLEMENTATION_STATUS.md` website.
+
+## Phase 17 — splash screen dan onboarding Flutter — 3 November 2026
+
+- Menambahkan alur splash singkat dan intro tiga halaman (Kenali Risiko di Sekitarmu, Informasi dan Peta Bencana, Keluarga Siaga) pada startup. Logo website yang telah tersedia di `assets/images/siaganow-nature-emblem.png` dan ilustrasi lokal yang sudah ada digunakan; peta hanya ilustratif tanpa pin/lokasi shelter atau zona risiko. Warna mint/green, krem, font Poppins, dan komponen Home maupun halaman lain tidak diubah.
+- Tombol Lewati, Selanjutnya, pagination, dan Mulai Sekarang diimplementasikan. Status onboarding disimpan dengan `shared_preferences` key `siaganow.onboarding.completed.v1`. Alur pemulihan token dan profil tetap menggunakan Secure Storage/API yang telah ada. Sesi token yang sudah ada dipertahankan dan menandai intro selesai agar pengguna lama tidak terhenti di onboarding.
+- File terkait: `lib/main.dart`, `test/widget_test.dart`, `pubspec.yaml`, `pubspec.lock`. Dependensi SharedPreferences ditambahkan pada versi 2.5.6; tidak ada perubahan backend, API, database, maupun migration. File progres ini juga diperbarui.
+- Verifikasi: seluruh **16 Flutter test lulus**, termasuk tes penyimpanan SharedPreferences, Skip, dan perpindahan tiga halaman hingga Mulai Sekarang. `flutter analyze` selesai dengan satu info lint yang sudah ada di `lib/main.dart` (curly braces, sekitar baris 3634), tanpa error analyzer. `git diff --check` bersih (hanya peringatan normal konversi akhir baris Git).
+- Build Android debug berhasil melalui Gradle (`BUILD SUCCESSFUL`, APK 226,051,651 byte, 3 November 2026). Build menunjukkan peringatan deprecasi Kotlin/Gradle dan Android SDK XML yang tidak menghalangi build. APK dipasang menggunakan `adb install -r` pada RMX2001; data aplikasi tidak dihapus. USB reverse port 8000 diaktifkan.
+- Pengujian perangkat: aplikasi terbuka pada RMX2001 dan force-stop/reopen kembali ke Home. Instalasi mempertahankan sesi login lama; karena jalur startup sengaja melewati onboarding untuk token yang sudah tersimpan, alur first-run/splash/intro belum terlihat dan tidak diverifikasi secara visual pada perangkat. Status completion preference tercatat `true` sesudah startup. Screenshot Home hasil reopen: `C:\Users\lenovo\.codex\visualizations\2026\10\25\01a1723c-cb56-7c91-b9d6-dd2217dd4c47\siaganow-rmx2001-home.png`.
+- Keterbatasan tes widget: widget test mencakup langsung perilaku splash/intro, Skip, Next, dan Start; integrasi root app terhadap first-launch dengan token kosong belum tervalidasi melalui test otomatis. Onboarding pada perangkat pengguna baru juga belum diverifikasi karena sesi yang sudah ada sengaja tidak dihapus atau diubah. Jangan menyatakan seluruh first-run QA perangkat lulus.
+
+## Phase 18 — penyempurnaan komponen intro — 3 November 2026
+
+- Komposisi khusus intro dirapikan: progres bernomor dan garis progres, ilustrasi ditempatkan pada bidang surface dengan batas halus, judul/deskripsi rata kiri dengan hirarki yang lebih jelas, dan tombol utama diberi ikon arah. Palet warna, font Poppins, aset/ilustrasi, tema aplikasi, serta layar lain tetap dipertahankan.
+- `flutter test --no-pub`: seluruh 16 tes lulus. `flutter analyze --no-pub`: satu info lint lama di `lib/main.dart` sekitar baris 3662; tanpa error. Build Gradle debug berhasil; APK 226,048,583 byte. APK dipasang ulang dengan `adb install -r` di RMX2001 dan app berhasil diforeground tanpa menghapus data.
+- QA visual perangkat untuk intro belum dilakukan: status onboarding pada HP sudah selesai akibat sesi yang telah ada, jadi startup tetap mengarah ke Home. Screenshot Home tersedia di workspace Codex. Preview golden sementara tidak dipertahankan karena test asset bundle/font tidak merepresentasikan tampilan perangkat.
+
+## Phase 19 — affordance bayangan tombol — 3 November 2026
+
+- Tema global `FilledButton`, `OutlinedButton`, dan `ElevatedButton` kini memberi bayangan bawah ringan saat aktif. Elevasi berkurang saat ditekan dan hilang saat disabled; bentuk, warna, ukuran, layout, serta desain halaman tidak diganti. TextButton dan IconButton mendapat elevasi lebih tipis tanpa tambahan latar sehingga tetap berbeda dari CTA utama.
+- Tes Flutter: **16 lulus**. Analyzer tidak menemukan error; tetap ada satu info lint sebelumnya di `lib/main.dart` sekitar baris 3687. Build Android debug berhasil (`BUILD SUCCESSFUL`, APK baru berhasil dibangun; ukuran dicatat pada artefak lokal.) dan berhasil dipasang ulang pada RMX2001 dengan `adb install -r`, menjaga data aplikasi.
+- Verifikasi visual khusus bayangan pada HP belum dilakukan; perangkat meluncur ke lock screen saat capture dan layar aplikasi tidak tertangkap pada sesi ini. Tidak menyatakan pemeriksaan visual bayangan lulus.

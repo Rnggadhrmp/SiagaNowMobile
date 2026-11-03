@@ -1,5 +1,25 @@
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:siaga_now_mobile/main.dart';
+
+final class _TestPlatformFile extends PlatformFile {
+  _TestPlatformFile(this.name, this.bytes);
+
+  @override
+  final String name;
+  final Uint8List bytes;
+
+  @override
+  Future<Uint8List> readAsBytes() async => bytes;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 void main() {
   group('API response models', () {
@@ -64,4 +84,54 @@ void main() {
       expect(WeatherPeriod.fromJson({}).temperature, isNull);
     });
   });
+
+  test(
+    'sends report fields and evidence through the existing multipart API',
+    () async {
+      http.BaseRequest? captured;
+      final api = ApiService(
+        const FlutterSecureStorage(),
+        client: MockClient((request) async {
+          captured = request;
+          return http.Response('{"data":{"id":7,"status":"submitted"}}', 201);
+        }),
+        tokenReader: () async => 'test-token',
+      );
+
+      final result = await api.uploadReport(
+        {
+          'title': 'QA contract payload',
+          'latitude': -0.95,
+          'longitude': 100.4,
+          'event_date': '2026-11-02',
+          'event_time': '10:00',
+          'event_type': 'Banjir',
+          'damage_level': 'Rendah',
+          'description': 'Synthetic payload stays inside this mocked test.',
+          'injured': 0,
+        },
+        [
+          _TestPlatformFile('evidence.jpg', Uint8List.fromList([1, 2, 3])),
+        ],
+      );
+
+      expect(result['data']['id'], 7);
+      expect(captured, isA<http.Request>());
+      final request = captured! as http.Request;
+      expect(request.headers['Authorization'], 'Bearer test-token');
+      expect(
+        request.headers['content-type'],
+        startsWith('multipart/form-data; boundary='),
+      );
+      expect(request.body, contains('name="title"'));
+      expect(request.body, contains('QA contract payload'));
+      expect(request.body, contains('name="latitude"'));
+      expect(request.body, contains('-0.95'));
+      expect(request.body, contains('name="injured"'));
+      expect(
+        request.body,
+        contains('name="evidence[]"; filename="evidence.jpg"'),
+      );
+    },
+  );
 }

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:file_picker/file_picker.dart';
@@ -30,13 +31,23 @@ const mapTileUrl = String.fromEnvironment(
   defaultValue: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
 );
 const appUserAgent = 'SiagaNowMobile/1.0';
-const _defaultMapLatitude = double.fromEnvironment(
+const _onboardingCompleteKey = 'siaganow.onboarding.completed.v1';
+
+WidgetStateProperty<double?> _actionButtonElevation(double restingElevation) =>
+    WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.disabled)) return 0;
+      if (states.contains(WidgetState.pressed)) return restingElevation * 0.45;
+      return restingElevation;
+    });
+
+const _actionButtonShadow = WidgetStatePropertyAll<Color>(Color(0x4D075B49));
+const _defaultMapLatitude = String.fromEnvironment(
   'SIAGANOW_DEFAULT_LATITUDE',
-  defaultValue: -0.9471,
+  defaultValue: '-0.9471',
 );
-const _defaultMapLongitude = double.fromEnvironment(
+const _defaultMapLongitude = String.fromEnvironment(
   'SIAGANOW_DEFAULT_LONGITUDE',
-  defaultValue: 100.4172,
+  defaultValue: '100.4172',
 );
 
 String get apiBase => apiOverride.isNotEmpty
@@ -80,15 +91,17 @@ class FamilyReminderService {
 
   static Future<bool> requestPermission() async {
     await initialize();
-    final android = _plugin.resolvePlatformSpecificImplementation<
-      AndroidFlutterLocalNotificationsPlugin
-    >();
+    final android = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (android != null) {
       return await android.requestNotificationsPermission() ?? true;
     }
-    final ios = _plugin.resolvePlatformSpecificImplementation<
-      IOSFlutterLocalNotificationsPlugin
-    >();
+    final ios = _plugin
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >();
     if (ios != null) {
       return await ios.requestPermissions(
             alert: true,
@@ -370,20 +383,46 @@ class WeatherPeriod {
   );
 }
 
+abstract interface class OnboardingProgressStore {
+  Future<bool> isComplete();
+  Future<void> markComplete();
+}
+
+class SharedPreferencesOnboardingStore implements OnboardingProgressStore {
+  @override
+  Future<bool> isComplete() async {
+    final preferences = await SharedPreferences.getInstance();
+    return preferences.getBool(_onboardingCompleteKey) ?? false;
+  }
+
+  @override
+  Future<void> markComplete() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setBool(_onboardingCompleteKey, true);
+  }
+}
+
 class SiagaNowApp extends StatefulWidget {
-  const SiagaNowApp({super.key});
+  const SiagaNowApp({super.key, this.onboardingStore, this.tokenReader});
+
+  final OnboardingProgressStore? onboardingStore;
+  final Future<String?> Function()? tokenReader;
+
   @override
   State<SiagaNowApp> createState() => _SiagaNowAppState();
 }
 
 class _SiagaNowAppState extends State<SiagaNowApp> {
   final storage = const FlutterSecureStorage();
+  late final OnboardingProgressStore onboardingStore =
+      widget.onboardingStore ?? SharedPreferencesOnboardingStore();
   final navigatorKey = GlobalKey<NavigatorState>();
   final messengerKey = GlobalKey<ScaffoldMessengerState>();
   late final api = ApiService(storage);
   int tab = 0;
   String? userName;
   bool booting = true;
+  bool onboardingPending = false;
 
   @override
   void initState() {
@@ -392,13 +431,32 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
   }
 
   Future<void> _restore() async {
+    var onboardingComplete = false;
+    try {
+      onboardingComplete = await onboardingStore.isComplete();
+    } catch (_) {
+      onboardingComplete = false;
+    }
+
     String? token;
     try {
-      token = await storage.read(key: 'token');
+      token = widget.tokenReader == null
+          ? await storage.read(key: 'token')
+          : await widget.tokenReader!();
     } catch (_) {
       token = null;
     }
-    if (token != null) {
+    if (!onboardingComplete && token?.isNotEmpty == true) {
+      onboardingComplete = true;
+      try {
+        await onboardingStore.markComplete();
+      } catch (_) {
+        // Keep an existing signed-in user on the existing startup path.
+      }
+    }
+    onboardingPending = !onboardingComplete && token?.isNotEmpty != true;
+
+    if (token?.isNotEmpty == true) {
       try {
         final me = await api.get('user');
         final profile = UserProfile.fromJson(
@@ -414,6 +472,15 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
       }
     }
     if (mounted) setState(() => booting = false);
+  }
+
+  Future<void> _completeOnboarding() async {
+    try {
+      await onboardingStore.markComplete();
+    } catch (_) {
+      // Continue into the app if local preferences are temporarily unavailable.
+    }
+    if (mounted) setState(() => onboardingPending = false);
   }
 
   Future<void> _auth() async {
@@ -504,18 +571,48 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
           ),
         ),
         filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            backgroundColor: forest,
-            foregroundColor: Colors.white,
-            minimumSize: const Size(48, 52),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
+          style:
+              FilledButton.styleFrom(
+                backgroundColor: forest,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(48, 52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ).copyWith(
+                elevation: _actionButtonElevation(3),
+                shadowColor: _actionButtonShadow,
+              ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: ButtonStyle(
+            elevation: _actionButtonElevation(1.5),
+            shadowColor: _actionButtonShadow,
+          ),
+        ),
+        iconButtonTheme: IconButtonThemeData(
+          style: ButtonStyle(
+            elevation: _actionButtonElevation(2),
+            shadowColor: _actionButtonShadow,
+          ),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom().copyWith(
+            elevation: _actionButtonElevation(3),
+            shadowColor: _actionButtonShadow,
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom().copyWith(
+            elevation: _actionButtonElevation(2),
+            shadowColor: _actionButtonShadow,
           ),
         ),
       ),
       home: booting
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+          : onboardingPending
+          ? SiagaNowIntro(onFinished: _completeOnboarding)
           : Scaffold(
               appBar: AppBar(
                 backgroundColor: const Color(0xFFCDEBDD),
@@ -526,18 +623,12 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
                 ),
                 title: Row(
                   children: [
-                    Container(
-                      width: 34,
-                      height: 34,
-                      decoration: BoxDecoration(
-                        color: forest,
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: const Icon(
-                        Icons.shield_moon_outlined,
-                        color: Colors.white,
-                        size: 20,
-                      ),
+                    Image.asset(
+                      'assets/images/siaganow-nature-emblem.png',
+                      width: 68,
+                      height: 45,
+                      fit: BoxFit.contain,
+                      semanticLabel: 'Lambang SiagaNow',
                     ),
                     const SizedBox(width: 10),
                     const Text(
@@ -639,6 +730,419 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
             ),
     );
   }
+}
+
+class SiagaNowIntro extends StatefulWidget {
+  const SiagaNowIntro({super.key, required this.onFinished});
+
+  final Future<void> Function() onFinished;
+
+  @override
+  State<SiagaNowIntro> createState() => _SiagaNowIntroState();
+}
+
+class _SiagaNowIntroState extends State<SiagaNowIntro> {
+  static const _forest = Color(0xFF075B49);
+  static const _mint = Color(0xFFD3F1E0);
+
+  static const _pages = <_IntroContent>[
+    _IntroContent(
+      title: 'Kenali Risiko di Sekitarmu',
+      description: 'Kenali informasi dan peringatan bencana yang tersedia sebagai bekal memahami situasi di sekitarmu.',
+      illustration: _IntroIllustration.risk,
+    ),
+    _IntroContent(
+      title: 'Informasi dan Peta Bencana',
+      description: 'Akses informasi cuaca, peta, dan lokasi terkait kebencanaan. Ketersediaan lokasi mengikuti data yang dapat ditampilkan aplikasi.',
+      illustration: _IntroIllustration.map,
+    ),
+    _IntroContent(
+      title: 'Keluarga Siaga',
+      description: 'Ajak keluarga menyiapkan informasi penting dan tetap saling memberi kabar melalui fitur Family Siaga.',
+      illustration: _IntroIllustration.family,
+    ),
+  ];
+
+  final _pageController = PageController();
+  int _currentPage = 0;
+  bool _showSplash = true;
+  bool _finishing = false;
+  Timer? _splashTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _splashTimer = Timer(const Duration(milliseconds: 1150), () {
+      if (mounted) setState(() => _showSplash = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _splashTimer?.cancel();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _finish() async {
+    if (_finishing) return;
+    setState(() => _finishing = true);
+    await widget.onFinished();
+  }
+
+  Future<void> _next() async {
+    if (_currentPage == _pages.length - 1) {
+      await _finish();
+      return;
+    }
+    await _pageController.animateToPage(
+      _currentPage + 1,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeInOutCubic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: _mint,
+    body: SafeArea(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.98, end: 1).animate(animation),
+            child: child,
+          ),
+        ),
+        child: _showSplash
+            ? const _IntroSplash(key: ValueKey('intro-splash'))
+            : _buildOnboarding(key: const ValueKey('intro-pages')),
+      ),
+    ),
+  );
+
+  Widget _buildOnboarding({required Key key}) => Padding(
+    key: key,
+    padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+    child: Column(
+      children: [
+        SizedBox(
+          height: 52,
+          child: Row(
+            children: [
+              Text(
+                '${(_currentPage + 1).toString().padLeft(2, '0')} / ${_pages.length.toString().padLeft(2, '0')}',
+                style: const TextStyle(
+                  color: _forest,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: (_currentPage + 1) / _pages.length,
+                    minHeight: 4,
+                    backgroundColor: const Color(0xFFB8D8C5),
+                    valueColor: const AlwaysStoppedAnimation<Color>(_forest),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: _finishing ? null : _finish,
+                style: TextButton.styleFrom(
+                  foregroundColor: _forest,
+                  minimumSize: const Size(64, 48),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                ),
+                child: const Text('Lewati'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: PageView.builder(
+            controller: _pageController,
+            itemCount: _pages.length,
+            onPageChanged: (page) => setState(() => _currentPage = page),
+            itemBuilder: (context, index) => _IntroPage(content: _pages[index]),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(_pages.length, (index) {
+            final selected = index == _currentPage;
+            return Semantics(
+              label: 'Halaman ${index + 1} dari ${_pages.length}',
+              selected: selected,
+              button: true,
+              child: InkWell(
+                onTap: _finishing
+                    ? null
+                    : () => _pageController.animateToPage(
+                        index,
+                        duration: const Duration(milliseconds: 280),
+                        curve: Curves.easeInOutCubic,
+                      ),
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: selected ? 24 : 9,
+                    height: 9,
+                    decoration: BoxDecoration(
+                      color: selected ? _forest : const Color(0xFF9DBEAA),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            onPressed: _finishing ? null : _next,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  _currentPage == _pages.length - 1
+                      ? 'Mulai Sekarang'
+                      : 'Selanjutnya',
+                ),
+                const SizedBox(width: 8),
+                const Icon(Icons.arrow_forward_rounded, size: 20),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _IntroSplash extends StatelessWidget {
+  const _IntroSplash({super.key});
+
+  static const _forest = Color(0xFF075B49);
+
+  @override
+  Widget build(BuildContext context) => Center(
+    key: key,
+    child: TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.94, end: 1),
+      duration: const Duration(milliseconds: 650),
+      curve: Curves.easeOutCubic,
+      builder: (context, scale, child) =>
+          Transform.scale(scale: scale, child: child),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.asset(
+              'assets/images/siaganow-nature-emblem.png',
+              width: 132,
+              height: 88,
+              fit: BoxFit.contain,
+              semanticLabel: 'Logo resmi SiagaNow',
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'SiagaNow',
+              style: TextStyle(
+                color: _forest,
+                fontSize: 28,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Siap Menghadapi Bencana, Lindungi Keluarga',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _forest, fontSize: 14, height: 1.5),
+            ),
+            const SizedBox(height: 26),
+            const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: _forest,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+enum _IntroIllustration { risk, map, family }
+
+class _IntroContent {
+  const _IntroContent({
+    required this.title,
+    required this.description,
+    required this.illustration,
+  });
+
+  final String title;
+  final String description;
+  final _IntroIllustration illustration;
+}
+
+class _IntroPage extends StatelessWidget {
+  const _IntroPage({required this.content});
+
+  static const _forest = Color(0xFF075B49);
+  static const _ink = Color(0xFF15392F);
+  static const _surface = Color(0xFFEFF8F2);
+
+  final _IntroContent content;
+
+  Widget _illustration(double height) {
+    switch (content.illustration) {
+      case _IntroIllustration.risk:
+        return Image.asset(
+          'assets/illustrations/home_flood_warning.png',
+          height: height,
+          fit: BoxFit.contain,
+          semanticLabel: 'Ilustrasi peringatan banjir',
+        );
+      case _IntroIllustration.map:
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: SizedBox(
+            height: height,
+            width: double.infinity,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Image.asset(
+                  'assets/images/landscape_background.png',
+                  fit: BoxFit.cover,
+                  semanticLabel: 'Ilustrasi lanskap, bukan peta lokasi',
+                ),
+                Align(
+                  alignment: Alignment.center,
+                  child: Container(
+                    width: 104,
+                    height: 104,
+                    decoration: const BoxDecoration(
+                      color: Color(0xF2EFF8F2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.map_outlined,
+                      size: 62,
+                      color: _forest,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      case _IntroIllustration.family:
+        return SizedBox(
+          height: height,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Image.asset(
+                'assets/illustrations/login_shield_landscape.png',
+                height: height,
+                fit: BoxFit.contain,
+                semanticLabel: 'Ilustrasi perlindungan dan kesiapsiagaan',
+              ),
+              Positioned(
+                right: 14,
+                bottom: 10,
+                child: Container(
+                  width: 56,
+                  height: 56,
+                  decoration: const BoxDecoration(
+                    color: _surface,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.family_restroom_outlined,
+                    size: 34,
+                    color: _forest,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final artHeight = (constraints.maxHeight * 0.43).clamp(175.0, 270.0);
+      return SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(2, 10, 2, 12),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  height: artHeight,
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: _surface,
+                    borderRadius: BorderRadius.circular(22),
+                    border: Border.all(color: const Color(0xFFCFE3D8)),
+                  ),
+                  child: Center(child: _illustration(artHeight - 28)),
+                ),
+                const SizedBox(height: 22),
+                Text(
+                  content.title,
+                  textAlign: TextAlign.left,
+                  style: const TextStyle(
+                    color: _ink,
+                    fontSize: 25,
+                    height: 1.3,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  content.description,
+                  textAlign: TextAlign.left,
+                  style: const TextStyle(
+                    color: Color(0xFF355249),
+                    fontSize: 16,
+                    height: 1.6,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }
 
 class HomePage extends StatefulWidget {
@@ -995,6 +1499,7 @@ class _HomeNewsCard extends StatelessWidget {
     final summary = '${item['summary'] ?? item['description'] ?? ''}';
     final image = item['image_url'] ?? item['image'];
     final imageUrl = image is String && image.startsWith('http') ? image : null;
+    final imageAsset = _demoNewsImageAsset(item['image_key']);
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(9),
@@ -1007,19 +1512,21 @@ class _HomeNewsCard extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (imageUrl != null)
+              if (imageAsset != null)
+                Image.asset(imageAsset, fit: BoxFit.cover),
+              if (imageAsset == null && imageUrl != null)
                 Image.network(
                   imageUrl,
                   fit: BoxFit.cover,
                   errorBuilder: (_, _, _) =>
                       const ColoredBox(color: Color(0xFF6F9E86)),
                 ),
-              if (imageUrl == null && simulation)
+              if (imageAsset == null && imageUrl == null && simulation)
                 Image.asset(
                   'assets/images/news_flooded_home.jpg',
                   fit: BoxFit.cover,
                 ),
-              if (imageUrl == null && !simulation)
+              if (imageAsset == null && imageUrl == null && !simulation)
                 const DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
@@ -1506,9 +2013,9 @@ class ShelterPage extends StatefulWidget {
 class _ShelterPageState extends State<ShelterPage> {
   final search = TextEditingController();
   final mapController = MapController();
-  static const _initialCenter = LatLng(
-    _defaultMapLatitude,
-    _defaultMapLongitude,
+  static final _initialCenter = LatLng(
+    double.tryParse(_defaultMapLatitude) ?? -0.9471,
+    double.tryParse(_defaultMapLongitude) ?? 100.4172,
   );
   static final Future<FileCacheStore> _tileStore = _createTileStore();
   List<ShelterRecord> places = [];
@@ -1634,16 +2141,13 @@ class _ShelterPageState extends State<ShelterPage> {
       if (mapReady) mapController.move(point, 15);
     } on TimeoutException {
       userLocation = null;
-      locationMessage =
-          'GPS tidak merespons dalam 15 detik. Peta tetap dapat digunakan di lokasi peta terakhir atau default Padang.';
+      locationMessage = 'GPS tidak merespons dalam 15 detik. Peta tetap dapat digunakan di lokasi peta terakhir atau default Padang.';
     } on LocationServiceDisabledException {
       userLocation = null;
-      locationMessage =
-          'GPS/lokasi perangkat nonaktif. Peta menggunakan lokasi peta terakhir atau default Padang; titik ini bukan posisi Anda.';
+      locationMessage = 'GPS/lokasi perangkat nonaktif. Peta menggunakan lokasi peta terakhir atau default Padang; titik ini bukan posisi Anda.';
     } on PermissionDeniedException {
       userLocation = null;
-      locationMessage =
-          'Izin lokasi ditolak. Peta menggunakan lokasi peta terakhir atau default Padang; titik ini bukan posisi Anda.';
+      locationMessage = 'Izin lokasi ditolak. Peta menggunakan lokasi peta terakhir atau default Padang; titik ini bukan posisi Anda.';
     } catch (error) {
       userLocation = null;
       locationMessage =
@@ -1652,9 +2156,8 @@ class _ShelterPageState extends State<ShelterPage> {
       if (mounted) {
         setState(() => locationLoading = false);
         if (!initialRequest && locationMessage != null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(locationMessage!)),
-          );
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(locationMessage!)));
         }
       }
     }
@@ -1776,9 +2279,7 @@ class _ShelterPageState extends State<ShelterPage> {
                           setState(() => mapReady = true);
                           if (!initialLocationRequested) {
                             initialLocationRequested = true;
-                            unawaited(
-                              useCurrentLocation(initialRequest: true),
-                            );
+                            unawaited(useCurrentLocation(initialRequest: true));
                           }
                         },
                         onPositionChanged: (camera, hasGesture) {
@@ -2482,6 +2983,7 @@ class _ReportPageState extends State<ReportPage> {
     decoration: InputDecoration(
       labelText: label,
       alignLabelWithHint: maxLines > 1,
+      errorMaxLines: 2,
       border: const OutlineInputBorder(),
     ),
   );
@@ -2750,7 +3252,9 @@ class _FamilyMemberDialogState extends State<_FamilyMemberDialog> {
             TextFormField(
               controller: relation,
               maxLength: 80,
-              decoration: const InputDecoration(labelText: 'Hubungan (opsional)'),
+              decoration: const InputDecoration(
+                labelText: 'Hubungan (opsional)',
+              ),
             ),
             const SizedBox(height: 10),
             TextFormField(
@@ -2762,7 +3266,8 @@ class _FamilyMemberDialogState extends State<_FamilyMemberDialog> {
               ),
               validator: (value) {
                 final input = value?.trim() ?? '';
-                if (input.isNotEmpty && !RegExp(r'^[+0-9() .-]{5,32}$').hasMatch(input)) {
+                if (input.isNotEmpty &&
+                    !RegExp(r'^[+0-9() .-]{5,32}$').hasMatch(input)) {
                   return 'Masukkan nomor telepon yang valid.';
                 }
                 return null;
@@ -2773,7 +3278,9 @@ class _FamilyMemberDialogState extends State<_FamilyMemberDialog> {
               controller: notes,
               maxLength: 1000,
               maxLines: 3,
-              decoration: const InputDecoration(labelText: 'Catatan (opsional)'),
+              decoration: const InputDecoration(
+                labelText: 'Catatan (opsional)',
+              ),
             ),
           ],
         ),
@@ -2855,7 +3362,10 @@ class _FamilyPageState extends State<FamilyPage> {
       final membershipResponse = await widget.api.get('family-memberships');
       final membershipData = membershipResponse['data'];
       memberships = membershipData is List
-          ? membershipData.whereType<Map>().map(Map<String, dynamic>.from).toList()
+          ? membershipData
+                .whereType<Map>()
+                .map(Map<String, dynamic>.from)
+                .toList()
           : [];
     } catch (e) {
       if (mounted) error = '$e';
@@ -2951,14 +3461,22 @@ class _FamilyPageState extends State<FamilyPage> {
       await widget.api.storage.delete(key: 'family_checkin_pending_$memberId');
       if (mounted && refresh) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Konfirmasi tersimpan di server. Ini mencatat jawaban saat ini, bukan jaminan kondisi setelahnya.')),
+          const SnackBar(
+            content: Text(
+              'Konfirmasi tersimpan di server. Ini mencatat jawaban saat ini, bukan jaminan kondisi setelahnya.',
+            ),
+          ),
         );
       }
       if (mounted) await load(retryPending: false);
     } catch (e) {
       if (mounted && refresh) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Tidak tersambung; konfirmasi disimpan sementara di perangkat dan akan dicoba lagi. $e')),
+          SnackBar(
+            content: Text(
+              'Tidak tersambung; konfirmasi disimpan sementara di perangkat dan akan dicoba lagi. $e',
+            ),
+          ),
         );
       }
     } finally {
@@ -2985,7 +3503,8 @@ class _FamilyPageState extends State<FamilyPage> {
     final id = int.tryParse('${member['id']}');
     if (id == null) return;
     final currentEnabled = member['reminder_enabled'] == true;
-    final initialHours = int.tryParse('${member['reminder_frequency_hours']}') ?? 24;
+    final initialHours =
+        int.tryParse('${member['reminder_frequency_hours']}') ?? 24;
     final choice = await showDialog<(bool, int)>(
       context: context,
       builder: (dialogContext) {
@@ -3000,21 +3519,26 @@ class _FamilyPageState extends State<FamilyPage> {
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Aktifkan pengingat lokal'),
-                  subtitle: const Text('Hanya pada perangkat ini; tidak dikirim sebagai push.'),
+                  subtitle: const Text(
+                    'Hanya pada perangkat ini; tidak dikirim sebagai push.',
+                  ),
                   value: enabled,
                   onChanged: (value) => setDialogState(() => enabled = value),
                 ),
                 DropdownButtonFormField<int>(
-                  value: hours,
+                  initialValue: hours,
                   decoration: const InputDecoration(labelText: 'Frekuensi'),
                   items: const [
                     DropdownMenuItem(value: 24, child: Text('Setiap hari')),
                     DropdownMenuItem(value: 168, child: Text('Setiap 7 hari')),
                   ],
-                  onChanged: (value) => setDialogState(() => hours = value ?? 24),
+                  onChanged: (value) =>
+                      setDialogState(() => hours = value ?? 24),
                 ),
                 const SizedBox(height: 8),
-                Text('Zona waktu perangkat: ${FamilyReminderService.timezoneName}'),
+                Text(
+                  'Zona waktu perangkat: ${FamilyReminderService.timezoneName}',
+                ),
               ],
             ),
             actions: [
@@ -3035,7 +3559,11 @@ class _FamilyPageState extends State<FamilyPage> {
     if (choice.$1 && !await FamilyReminderService.requestPermission()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Izin notifikasi ditolak. Pengingat tidak diaktifkan.')),
+          const SnackBar(
+            content: Text(
+              'Izin notifikasi ditolak. Pengingat tidak diaktifkan.',
+            ),
+          ),
         );
       }
       return;
@@ -3066,7 +3594,9 @@ class _FamilyPageState extends State<FamilyPage> {
             'frequency_hours': choice.$2,
             'timezone': FamilyReminderService.timezoneName,
           });
-          throw const ApiException('Pengaturan tersimpan tetapi jadwal lokal gagal dibuat; pengingat dinonaktifkan kembali.');
+          throw const ApiException(
+            'Pengaturan tersimpan tetapi jadwal lokal gagal dibuat; pengingat dinonaktifkan kembali.',
+          );
         }
         rethrow;
       }
@@ -3159,12 +3689,14 @@ class _FamilyPageState extends State<FamilyPage> {
 
   String checkInSummary(Map<String, dynamic> member) {
     final nextAt = DateTime.tryParse('${member['next_reminder_at'] ?? ''}');
-    final overdue = member['overdue'] == true ||
+    final overdue =
+        member['overdue'] == true ||
         (member['reminder_enabled'] == true &&
             nextAt != null &&
             nextAt.isBefore(DateTime.now().toUtc()));
     final checkInAt = DateTime.tryParse('${member['check_in_at'] ?? ''}');
-    if (overdue) return 'Menunggu konfirmasi · terlambat jadwal, bukan keadaan darurat';
+    if (overdue)
+      return 'Menunggu konfirmasi · terlambat jadwal, bukan keadaan darurat';
     if (checkInAt == null) return 'Belum ada konfirmasi';
     return 'Sudah konfirmasi aman · ${checkInAt.toLocal()} (jawaban saat itu, bukan status saat ini)';
   }
@@ -3172,7 +3704,8 @@ class _FamilyPageState extends State<FamilyPage> {
   String reminderSummary(Map<String, dynamic> member) {
     if (member['reminder_enabled'] != true) return 'Pengingat nonaktif';
     final nextAt = DateTime.tryParse('${member['next_reminder_at'] ?? ''}');
-    final frequency = int.tryParse('${member['reminder_frequency_hours']}') ?? 24;
+    final frequency =
+        int.tryParse('${member['reminder_frequency_hours']}') ?? 24;
     final frequencyLabel = frequency == 168 ? '7 hari' : '24 jam';
     return 'Pengingat lokal aktif setiap $frequencyLabel${nextAt == null ? '' : ' · berikutnya ${nextAt.toLocal()}'}';
   }
@@ -3424,11 +3957,23 @@ class _FamilyPageState extends State<FamilyPage> {
                               }
                             },
                             itemBuilder: (_) => [
-                              const PopupMenuItem(value: 'edit', child: Text('Ubah')),
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: Text('Ubah'),
+                              ),
                               if (member['user_id'] == null)
-                                const PopupMenuItem(value: 'invite', child: Text('Undang akun')),
-                              const PopupMenuItem(value: 'reminder', child: Text('Pengingat')),
-                              const PopupMenuItem(value: 'remove', child: Text('Hapus')),
+                                const PopupMenuItem(
+                                  value: 'invite',
+                                  child: Text('Undang akun'),
+                                ),
+                              const PopupMenuItem(
+                                value: 'reminder',
+                                child: Text('Pengingat'),
+                              ),
+                              const PopupMenuItem(
+                                value: 'remove',
+                                child: Text('Hapus'),
+                              ),
                             ],
                           ),
                         ),
@@ -3472,10 +4017,11 @@ class _FamilyPageState extends State<FamilyPage> {
                             style: TextStyle(fontSize: 12),
                           ),
                           const SizedBox(height: 8),
-                          for (final raw in (membership['members'] is List
-                                  ? membership['members'] as List
-                                  : const <Object>[])
-                              .whereType<Map>())
+                          for (final raw
+                              in (membership['members'] is List
+                                      ? membership['members'] as List
+                                      : const <Object>[])
+                                  .whereType<Map>())
                             Padding(
                               padding: const EdgeInsets.symmetric(vertical: 5),
                               child: Text(
@@ -3486,7 +4032,8 @@ class _FamilyPageState extends State<FamilyPage> {
                             spacing: 8,
                             children: [
                               FilledButton.icon(
-                                onPressed: saving ||
+                                onPressed:
+                                    saving ||
                                         pendingCheckIns.contains(
                                           int.tryParse('${membership['id']}'),
                                         )
@@ -3494,7 +4041,8 @@ class _FamilyPageState extends State<FamilyPage> {
                                     : () => checkIn(
                                         int.parse('${membership['id']}'),
                                       ),
-                                icon: pendingCheckIns.contains(
+                                icon:
+                                    pendingCheckIns.contains(
                                       int.tryParse('${membership['id']}'),
                                     )
                                     ? const SizedBox(
@@ -4481,12 +5029,18 @@ class NewsDetailPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final image = article['image_url'] ?? article['image'];
     final imageUrl = image is String && image.startsWith('http') ? image : null;
+    final imageAsset = _demoNewsImageAsset(article['image_key']);
     return Scaffold(
       appBar: AppBar(title: const Text('Detail berita')),
       body: ListView(
         padding: const EdgeInsets.all(18),
         children: [
-          if (imageUrl != null)
+          if (imageAsset != null)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.asset(imageAsset, height: 210, fit: BoxFit.cover),
+            ),
+          if (imageAsset == null && imageUrl != null)
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
               child: Image.network(
@@ -4499,7 +5053,7 @@ class NewsDetailPage extends StatelessWidget {
                 ),
               ),
             ),
-          if (imageUrl == null && simulation)
+          if (imageAsset == null && imageUrl == null && simulation)
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
               child: Image.asset(
@@ -4527,6 +5081,20 @@ class NewsDetailPage extends StatelessWidget {
             '${article['summary'] ?? article['description'] ?? 'Ringkasan belum tersedia.'}',
             style: const TextStyle(fontSize: 16, height: 1.5),
           ),
+          if (article['image_caption'] != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              '${article['image_caption']}',
+              style: const TextStyle(fontSize: 12, height: 1.4),
+            ),
+          ],
+          if (article['image_credit'] != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Foto: ${article['image_credit']}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF68756B)),
+            ),
+          ],
           if (article['location'] != null) ...[
             const SizedBox(height: 14),
             ListTile(
@@ -4551,6 +5119,12 @@ class NewsDetailPage extends StatelessWidget {
     );
   }
 }
+
+String? _demoNewsImageAsset(dynamic key) => switch (key) {
+  'flood_jakarta' => 'assets/images/demo_flood_illustrative.jpg',
+  'mountain_rain' => 'assets/images/demo_mountain_rain.jpg',
+  _ => null,
+};
 
 class ReportDetailPage extends StatelessWidget {
   const ReportDetailPage({super.key, required this.report});

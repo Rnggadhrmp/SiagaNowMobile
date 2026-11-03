@@ -12,6 +12,7 @@ ApiService _api() => ApiService(
   client: MockClient((request) async {
     final payload = switch (request.url.path) {
       '/api/family-groups' => {'data': <Object>[]},
+      '/api/family-memberships' => {'data': <Object>[]},
       '/api/risk-assessments' => {'data': <Object>[]},
       _ => {'message': 'Unexpected test request'},
     };
@@ -26,6 +27,10 @@ ApiService _familyApi({int createStatus = 201}) {
   return ApiService(
     const FlutterSecureStorage(),
     client: MockClient((request) async {
+      if (request.method == 'GET' &&
+          request.url.path == '/api/family-memberships') {
+        return http.Response(jsonEncode({'data': <Object>[]}), 200);
+      }
       if (request.method == 'GET' && request.url.path == '/api/family-groups') {
         return http.Response(
           jsonEncode({
@@ -225,4 +230,39 @@ void main() {
       expect(tester.takeException(), isNull);
     }
   });
+  testWidgets(
+    'report form shows complete validation errors without sending while signed out',
+    (tester) async {
+      var loginRequested = false;
+      tester.view.physicalSize = const Size(1080, 4000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ReportPage(
+            api: _api(),
+            loggedIn: false,
+            onLogin: () async => loginRequested = true,
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Kirim laporan'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Masukkan judul minimal 4 karakter.'), findsOneWidget);
+      expect(
+        find.text('Masukkan titik antara -90.0 dan 90.0.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Masukkan titik antara -180.0 dan 180.0.'),
+        findsOneWidget,
+      );
+      expect(find.text('Deskripsi minimal 10 karakter.'), findsOneWidget);
+      expect(loginRequested, isFalse);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

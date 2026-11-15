@@ -24,6 +24,8 @@ import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
+import 'location_warning.dart';
+
 const apiOverride = String.fromEnvironment('SIAGANOW_API_URL');
 const demoMode = bool.fromEnvironment('SIAGANOW_DEMO_MODE', defaultValue: true);
 const mapTileUrl = String.fromEnvironment(
@@ -1151,10 +1153,12 @@ class HomePage extends StatefulWidget {
     required this.api,
     required this.onSelectTab,
     required this.onOpenFamily,
+    this.locationProvider,
   });
   final ApiService api;
   final ValueChanged<int> onSelectTab;
   final VoidCallback onOpenFamily;
+  final WarningLocationProvider? locationProvider;
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -1166,6 +1170,10 @@ class _HomePageState extends State<HomePage> {
   List<WeatherPeriod> forecasts = [];
   bool loading = true;
   String? error;
+  Map<String, dynamic>? locationWarning;
+  bool locationWarningLoading = false;
+  String? locationWarningError;
+  LocationAccessIssue? locationAccessIssue;
   @override
   void initState() {
     super.initState();
@@ -1209,6 +1217,105 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() => loading = false);
   }
 
+  Future<void> checkLocationWarning() async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Periksa peringatan di lokasi Anda'),
+        content: const Text(
+          'SiagaNow akan menggunakan lokasi perangkat untuk satu kali pemeriksaan cakupan peringatan cuaca. Lokasi tidak digunakan untuk pelacakan latar belakang.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Lanjutkan'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return;
+
+    setState(() {
+      locationWarningLoading = true;
+      locationWarningError = null;
+      locationAccessIssue = null;
+      locationWarning = {
+        'status': 'unknown',
+        'message': 'Memeriksa peringatan pada koordinat perangkat…',
+        'source': 'BMKG',
+      };
+    });
+
+    try {
+      final coordinates =
+          await (widget.locationProvider ?? GeolocatorWarningLocationProvider())
+              .currentCoordinates();
+      if (!coordinates.isValid) {
+        throw const LocationAccessException(
+          LocationAccessIssue.unavailable,
+          'Koordinat perangkat tidak valid. Coba lagi.',
+        );
+      }
+
+      final response = await widget.api.get(
+        'weather-warning',
+        query: {
+          'lat': coordinates.latitude.toString(),
+          'lng': coordinates.longitude.toString(),
+        },
+      );
+      final status = response['status']?.toString();
+      if (!['warning_found', 'no_warning_found', 'unknown'].contains(status)) {
+        throw const ApiException(
+          'Respons status peringatan tidak lengkap. Status tetap belum diketahui.',
+        );
+      }
+
+      locationWarning = Map<String, dynamic>.from(response)
+        ..['active'] = status == 'warning_found';
+      if (status == 'unknown') {
+        locationWarningError = response['message']?.toString();
+      }
+    } on LocationAccessException catch (exception) {
+      locationAccessIssue = exception.issue;
+      locationWarningError = exception.message;
+      locationWarning = {
+        'status': 'unknown',
+        'message': exception.message,
+        'source': 'BMKG',
+      };
+    } on ApiException catch (exception) {
+      locationWarningError = exception.message;
+      locationWarning = {
+        'status': 'unknown',
+        'message': exception.message,
+        'source': 'BMKG',
+      };
+    } catch (_) {
+      locationWarningError =
+          'Pemeriksaan gagal. Status peringatan tetap belum diketahui.';
+      locationWarning = {
+        'status': 'unknown',
+        'message': locationWarningError,
+        'source': 'BMKG',
+      };
+    } finally {
+      if (mounted) setState(() => locationWarningLoading = false);
+    }
+  }
+
+  Future<void> openLocationSettings() async {
+    if (locationAccessIssue == LocationAccessIssue.permissionDeniedForever) {
+      await Geolocator.openAppSettings();
+    } else if (locationAccessIssue == LocationAccessIssue.serviceDisabled) {
+      await Geolocator.openLocationSettings();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final weather = data?['weather'];
@@ -1241,10 +1348,20 @@ class _HomePageState extends State<HomePage> {
             _HomeNewsEmpty(onTap: () => widget.onSelectTab(3)),
           const SizedBox(height: 18),
           _WarningStatusCard(
-            warning: data?['warning'],
-            loading: loading,
-            error: error,
+            warning: locationWarning ?? data?['warning'],
+            loading: loading || locationWarningLoading,
+            error: locationWarningError ?? error,
+            checkingLocation: locationWarningLoading,
+            onCheckLocation: checkLocationWarning,
+            onOpenSettings:
+                locationAccessIssue ==
+                        LocationAccessIssue.permissionDeniedForever ||
+                    locationAccessIssue == LocationAccessIssue.serviceDisabled
+                ? openLocationSettings
+                : null,
           ),
+          const SizedBox(height: 18),
+          _AiFloodDetectionCard(value: data?['flood_detection']),
           const SizedBox(height: 18),
           Material(
             color: const Color(0xFF087354),
@@ -1654,15 +1771,105 @@ class _HomeNewsEmpty extends StatelessWidget {
   );
 }
 
+class _AiFloodDetectionCard extends StatelessWidget {
+  const _AiFloodDetectionCard({required this.value});
+
+  final dynamic value;
+
+  @override
+  Widget build(BuildContext context) {
+    final result = value is Map
+        ? Map<String, dynamic>.from(value as Map)
+        : <String, dynamic>{};
+    final status = '${result['status'] ?? 'unknown'}';
+    final label = switch (status) {
+      'normal' => 'Normal · hasil model',
+      'warning' => 'Waspada',
+      'danger' => 'Bahaya',
+      _ => 'Unknown',
+    };
+    final observation = result['latest_observation'] is Map
+        ? Map<String, dynamic>.from(result['latest_observation'] as Map)
+        : <String, dynamic>{};
+    final camera = observation['camera'] is Map
+        ? Map<String, dynamic>.from(observation['camera'] as Map)
+        : <String, dynamic>{};
+    final confidence = observation['confidence'];
+    final verificationLabel = switch ('${observation['verification_status'] ?? ''}') {
+      'verified' => 'Ditinjau petugas',
+      'rejected' => 'Ditolak petugas',
+      'pending' => 'Belum ditinjau petugas',
+      _ => null,
+    };
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF5EE),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFB8D9C8)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.water, color: Color(0xFF075B49), size: 24),
+              const SizedBox(width: 9),
+              const Expanded(
+                child: Text(
+                  'AI Flood Detection',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                ),
+              ),
+              Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${result['message'] ?? 'Observasi AI belum tersedia.'}',
+            style: const TextStyle(fontSize: 12, height: 1.35),
+          ),
+          if (observation.isNotEmpty) ...[
+            const SizedBox(height: 5),
+            Text(
+              [
+                if (camera['name'] != null) camera['name'].toString(),
+                if (observation['observed_at'] != null)
+                  'Observasi ${observation['observed_at']}',
+                if (confidence is num)
+                  'Confidence ${(confidence * 100).toStringAsFixed(1)}%',
+                ?verificationLabel,
+              ].join(' · '),
+              style: const TextStyle(fontSize: 11, color: Color(0xFF53665C)),
+            ),
+          ],
+          const SizedBox(height: 6),
+          const Text(
+            'Hasil model bukan peringatan resmi. Jika data tidak ada atau kedaluwarsa, status tetap Unknown.',
+            style: TextStyle(fontSize: 10, height: 1.3, color: Color(0xFF53665C)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _WarningStatusCard extends StatelessWidget {
   const _WarningStatusCard({
     required this.warning,
     required this.loading,
     required this.error,
+    this.checkingLocation = false,
+    this.onCheckLocation,
+    this.onOpenSettings,
   });
   final dynamic warning;
   final bool loading;
   final String? error;
+  final bool checkingLocation;
+  final VoidCallback? onCheckLocation;
+  final VoidCallback? onOpenSettings;
   @override
   Widget build(BuildContext context) {
     final values = warning is Map
@@ -1680,6 +1887,8 @@ class _WarningStatusCard extends StatelessWidget {
         : 'Status peringatan belum diketahui';
     final detail = active
         ? '${values['message'] ?? 'Ikuti instruksi otoritas setempat.'}'
+        : status == 'no_warning_found'
+        ? '${values['message'] ?? 'Tidak ditemukan peringatan aktif di titik ini. Ini bukan jaminan lokasi aman.'}'
         : known
         ? 'Belum ada peringatan aktif yang dikirim oleh sumber ini.'
         : error ??
@@ -1691,45 +1900,115 @@ class _WarningStatusCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0xFFF4CECE)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Image.asset(
-            'assets/illustrations/home_flood_warning.png',
-            width: 72,
-            height: 72,
-            fit: BoxFit.contain,
+          Row(
+            children: [
+              Image.asset(
+                'assets/illustrations/home_flood_warning.png',
+                width: 72,
+                height: 72,
+                fit: BoxFit.contain,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'INFORMASI PERINGATAN',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF9F4545),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      detail,
+                      style: const TextStyle(fontSize: 12, height: 1.2),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'INFORMASI PERINGATAN',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF9F4545),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  detail,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12, height: 1.2),
-                ),
-              ],
+          if (values['source'] != null || values['checked_at'] != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 84, top: 6),
+              child: Text(
+                [
+                  if (values['source'] != null) 'Sumber: ${values['source']}',
+                  if (values['checked_at'] != null)
+                    'Diperiksa ${values['checked_at']}',
+                ].join(' · '),
+                style: const TextStyle(fontSize: 11, color: Color(0xFF68756B)),
+              ),
             ),
-          ),
+          if (values['warnings'] is List &&
+              (values['warnings'] as List).isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 84, top: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: (values['warnings'] as List)
+                    .whereType<Map>()
+                    .take(2)
+                    .map(
+                      (item) => Padding(
+                        padding: const EdgeInsets.only(bottom: 3),
+                        child: Text(
+                          [item['title']?.toString(), item['area']?.toString()]
+                              .whereType<String>()
+                              .where((part) => part.isNotEmpty)
+                              .join(' · '),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          if (onOpenSettings != null)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: onOpenSettings,
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('Buka pengaturan lokasi'),
+              ),
+            ),
+          if (onCheckLocation != null)
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: checkingLocation ? null : onCheckLocation,
+                icon: checkingLocation
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.my_location_outlined),
+                label: Text(
+                  checkingLocation
+                      ? 'Memeriksa lokasi…'
+                      : 'Periksa peringatan di lokasi saya',
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -3695,8 +3974,9 @@ class _FamilyPageState extends State<FamilyPage> {
             nextAt != null &&
             nextAt.isBefore(DateTime.now().toUtc()));
     final checkInAt = DateTime.tryParse('${member['check_in_at'] ?? ''}');
-    if (overdue)
+    if (overdue) {
       return 'Menunggu konfirmasi · terlambat jadwal, bukan keadaan darurat';
+    }
     if (checkInAt == null) return 'Belum ada konfirmasi';
     return 'Sudah konfirmasi aman · ${checkInAt.toLocal()} (jawaban saat itu, bukan status saat ini)';
   }

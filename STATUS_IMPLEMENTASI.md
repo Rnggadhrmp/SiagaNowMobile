@@ -315,3 +315,16 @@ Catatan ini melengkapi dan tidak menggantikan riwayat terdahulu di `IMPLEMENTATI
 - **Pengujian tambahan:** data default 112 terpisah dari BPBD; simpan/hapus nomor lokal; ubah nomor instansi dari UI; verifikasi tel URI; semua daftar ditampilkan pada 320×640 dan 360×740 dengan text scale 1,5.
 - **Validasi:** `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (55 test); `git diff --check` bersih (peringatan Git LF→CRLF hanya untuk dokumen Markdown).
 - **Belum selesai:** nomor instansi di luar PCC 112 Padang belum disediakan dan harus diverifikasi/dimasukkan pengguna. Kontak lokal tersimpan pada perangkat ini saja. Build APK dan QA visual emulator dijadwalkan pada Tahap 24.
+
+## Tahap 23 — Katalog dan alur donasi terbatas (implementasi)
+
+**Tanggal:** 16 November 2026
+
+- **Sumber data:** implementasi backend read-only memastikan `GET /api/donation-campaigns` memang tersedia. `ApiDonationRepository` memakai endpoint itu dan hanya menampilkan record yang diberikan sebagai katalog program publik; tidak ada fixture atau program contoh di build normal. Kegagalan dan daftar kosong ditampilkan dengan empty/error state serta tombol coba lagi.
+- **Daftar/detail:** ditambahkan toggle Donasi/Galang Dana (Galang Dana bertuliskan segera hadir), pencarian, detail program, sumber/penggalang dan target bila ada. Endpoint tidak menyertakan foto, dana terkumpul, atau jumlah transaksi; UI memakai placeholder foto serta menjelaskan data total/persentase belum tersedia. Tidak ada klaim identitas penggalang terverifikasi terpisah dari verifikasi record program.
+- **Nominal dan pembayaran:** nominal pilihan Rp5.000 hingga Rp1.000.000 dan input khusus dengan minimum Rp5.000. Aksi Donasi Sekarang meminta login bila belum ada sesi. Metode QRIS, BCA, BRI, ShopeePay, BNI, dan lainnya tampil nonaktif karena belum ada provider pembayaran mobile. `Lanjutkan Pembayaran` hanya membuka dialog `Pembayaran belum tersedia di versi ini`; tidak ada transaksi, QR, VA, atau total yang dibuat.
+- **Backend:** tidak diubah. Endpoint hanya baca; tidak ditemukan endpoint transaksi atau pembayaran. Mode demo tidak ditambahkan karena endpoint katalog sudah ada dan build ini tidak memerlukan data contoh.
+- **File diubah:** `lib/main.dart`, `lib/models/donation_campaign.dart`, `lib/services/donation_repository.dart`, `lib/screens/donation_page.dart`, `test/donation_flow_test.dart`, `test/feature_lifecycle_layout_test.dart`, dan dokumen ini.
+- **Pengujian tambahan:** katalog kosong tanpa data rekaan; kartu/detail pada 320×640 dan 360×740 dengan text scale 1,5; login gate; validasi nominal minimum; semua metode nonaktif; dialog pembayaran belum tersedia.
+- **Validasi:** `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (58 test); `git diff --check` bersih.
+- **Belum tersedia:** kategori, foto, akumulasi terkumpul, verifikasi identitas penggalang terpisah, program Galang Dana, dan pembayaran belum disediakan oleh endpoint/provider. Build APK dan QA visual emulator dijadwalkan pada Tahap 24.

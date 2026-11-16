@@ -30,8 +30,10 @@ import 'location_warning.dart';
 import 'services/profile_photo_service.dart';
 import 'models/shelter_record.dart';
 import 'services/routing_service.dart';
+import 'services/donation_repository.dart';
 import 'screens/evacuation_screens.dart';
 import 'screens/emergency_contacts_page.dart';
+import 'screens/donation_page.dart';
 import 'widgets/siaganow_page_background.dart';
 
 export 'widgets/siaganow_page_background.dart';
@@ -1338,7 +1340,14 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
                       onLogin: _requireLogin,
                       onHome: () => setState(() => tab = 0),
                     ),
-                    const DonationPage(embedded: true),
+                    DonationPage(
+                      repository: ApiDonationRepository(
+                        fetchCampaigns: () => api.get('donation-campaigns'),
+                      ),
+                      embedded: true,
+                      loggedIn: userName != null,
+                      onLogin: _requireLogin,
+                    ),
                     const EmergencyContactsPage(embedded: true),
                   ],
                 ),
@@ -4872,9 +4881,17 @@ class MorePage extends StatelessWidget {
         icon: Icons.volunteer_activism_outlined,
         title: 'Donasi tanggap bencana',
         body: 'Informasi kanal resmi dan status pembayaran.',
-        onTap: () =>
-            Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const DonationPage())),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => DonationPage(
+              repository: ApiDonationRepository(
+                fetchCampaigns: () => api.get('donation-campaigns'),
+              ),
+              loggedIn: loggedIn,
+              onLogin: onLogin,
+            ),
+          ),
+        ),
       ),
       _ServiceCard(
         icon: Icons.person_outline,
@@ -4929,78 +4946,6 @@ class MorePage extends StatelessWidget {
       ),
     ],
   );
-}
-
-class DonationPage extends StatelessWidget {
-  const DonationPage({super.key, this.embedded = false});
-
-  final bool embedded;
-
-  @override
-  Widget build(BuildContext context) {
-    final content = ListView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 112),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: SiagaNowSurfaceTokens.mintInfo,
-            borderRadius: BorderRadius.circular(
-              SiagaNowSurfaceTokens.panelRadius,
-            ),
-          ),
-          child: const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                Icons.volunteer_activism_outlined,
-                size: 36,
-                color: Color(0xFF075B49),
-              ),
-              SizedBox(height: 14),
-              Text(
-                'Dukungan untuk kesiapsiagaan',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-              ),
-              SizedBox(height: 8),
-              Text(
-                'Halaman ini hanya menampilkan informasi yang telah diverifikasi. Saat ini belum ada program atau organisasi donasi resmi yang dikonfigurasi di aplikasi.',
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        const Card(
-          child: ListTile(
-            leading: Icon(Icons.verified_outlined),
-            title: Text('Verifikasi kanal terlebih dahulu'),
-            subtitle: Text(
-              'Gunakan kanal resmi lembaga terkait yang Anda verifikasi secara mandiri. SiagaNow belum menyediakan tautan donasi resmi.',
-            ),
-            isThreeLine: true,
-          ),
-        ),
-        const Card(
-          child: ListTile(
-            leading: Icon(Icons.payments_outlined),
-            title: Text('Pembayaran dalam aplikasi tidak tersedia'),
-            subtitle: Text(
-              'Tidak ada pembayaran, konfirmasi donasi, target, atau total dana yang disimpan oleh aplikasi ini.',
-            ),
-            isThreeLine: true,
-          ),
-        ),
-      ],
-    );
-    if (embedded) return content;
-    return Scaffold(
-      appBar: AppBar(
-        flexibleSpace: const SiagaNowHeaderBackground(),
-        title: const Text('Donasi'),
-      ),
-      body: SiagaNowPageBackground(child: content),
-    );
-  }
 }
 
 class _FamilyNameDialog extends StatefulWidget {
@@ -6873,9 +6818,17 @@ class _ProfilePageState extends State<ProfilePage> {
       _ProfileMenuButton(
         icon: Icons.volunteer_activism_outlined,
         title: 'Informasi Donasi',
-        onTap: () =>
-            Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const DonationPage())),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => DonationPage(
+              repository: ApiDonationRepository(
+                fetchCampaigns: () => widget.api.get('donation-campaigns'),
+              ),
+              loggedIn: profile != null,
+              onLogin: () async => widget.onLogin(),
+            ),
+          ),
+        ),
       ),
       _ProfileMenuButton(
         icon: Icons.assignment_outlined,

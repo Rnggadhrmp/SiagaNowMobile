@@ -52,6 +52,10 @@ ApiService _navigationApi() => ApiService(
         'warning': {'status': 'unknown', 'active': false},
       },
       '/api/news' => {'data': <Object>[], 'data_type': 'unavailable'},
+      '/api/donation-campaigns' => {
+        'data': <Object>[],
+        'data_type': 'database',
+      },
       '/api/shelters' => {'data': <Object>[], 'data_type': 'database'},
       _ => {'message': 'Unexpected test request'},
     };
@@ -340,9 +344,24 @@ void main() {
         expect(find.text('Laporan'), findsOneWidget);
         expect(tester.takeException(), isNull);
 
-        await tester.tap(find.text('Donasi'));
+        await tester.tap(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics &&
+                widget.properties.label == 'Donasi' &&
+                widget.properties.selected != true,
+          ),
+        );
         await tester.pumpAndSettle();
-        expect(find.text('Dukungan untuk kesiapsiagaan'), findsOneWidget);
+        await tester.drag(
+          find.byKey(const ValueKey('donation-catalog-list')),
+          const Offset(0, -240),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Belum ada program donasi terverifikasi'),
+          findsOneWidget,
+        );
         expect(
           find.byWidgetPredicate(
             (widget) =>

@@ -28,6 +28,14 @@ import 'package:timezone/timezone.dart' as tz;
 
 import 'location_warning.dart';
 import 'services/profile_photo_service.dart';
+import 'models/shelter_record.dart';
+import 'services/routing_service.dart';
+import 'screens/evacuation_screens.dart';
+import 'widgets/siaganow_page_background.dart';
+
+export 'widgets/siaganow_page_background.dart';
+export 'models/shelter_record.dart';
+export 'services/routing_service.dart';
 
 const apiOverride = String.fromEnvironment('SIAGANOW_API_URL');
 const demoMode = bool.fromEnvironment('SIAGANOW_DEMO_MODE', defaultValue: true);
@@ -50,179 +58,6 @@ WidgetStateProperty<double?> _actionButtonElevation(double restingElevation) =>
     });
 
 const _actionButtonShadow = WidgetStatePropertyAll<Color>(Color(0x4D075B49));
-
-/// Shared visual tokens for information surfaces; controls remain solid.
-abstract final class SiagaNowSurfaceTokens {
-  static const info = Color(0xBFFFFFFF); // 75% opaque
-  static const mintInfo = Color(0xBFEAF9EF); // 75% opaque
-  static const warning = Color(0xCCFFF0F0); // 80% opaque for semantic contrast
-  static const error = Color(0xCCFFEEEE);
-  static const notice = Color(0xCCFFF3D7);
-  static const simulationNotice = Color(0xCCFFF2D5);
-  static const border = Color(0x66FFFFFF);
-  static const cardRadius = 12.0;
-  static const panelRadius = 12.0;
-  static const dialogRadius = 16.0;
-}
-
-class SiagaNowHeaderBackground extends StatelessWidget {
-  const SiagaNowHeaderBackground({
-    super.key,
-    this.overlayOpacity = .5,
-    this.waveAlignment = Alignment.topCenter,
-  });
-
-  final double overlayOpacity;
-  final Alignment waveAlignment;
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final width = constraints.maxWidth.isFinite
-          ? constraints.maxWidth
-          : MediaQuery.sizeOf(context).width;
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Color(0xFF79B99E), Color(0xFFCDEBDD)],
-              ),
-            ),
-          ),
-          Positioned.fill(
-            key: const ValueKey('siaganow.header.wave'),
-            child: Image.asset(
-              'assets/images/header_waves.png',
-              width: width,
-              fit: BoxFit.fitWidth,
-              alignment: waveAlignment,
-            ),
-          ),
-          Positioned.fill(
-            key: const ValueKey('siaganow.header.green-overlay'),
-            child: IgnorePointer(
-              child: Opacity(
-                opacity: overlayOpacity.clamp(.4, .6),
-                child: ColorFiltered(
-                  colorFilter: const ColorFilter.mode(
-                    Color(0xFF16845F),
-                    BlendMode.srcATop,
-                  ),
-                  child: Image.asset(
-                    'assets/images/header_waves.png',
-                    width: width,
-                    fit: BoxFit.fitWidth,
-                    alignment: waveAlignment,
-                    filterQuality: FilterQuality.medium,
-                    excludeFromSemantics: true,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-    },
-  );
-}
-
-class SiagaNowPageBackground extends StatelessWidget {
-  const SiagaNowPageBackground({
-    super.key,
-    required this.child,
-    this.showTop = false,
-    this.showLandscape = true,
-    this.landscapeHeight,
-  });
-
-  final Widget child;
-  final bool showTop;
-  final bool showLandscape;
-  final double? landscapeHeight;
-
-  @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final footerHeight = min(
-        landscapeHeight ?? 330.0,
-        constraints.maxHeight * .44,
-      );
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          const ColoredBox(color: Color(0xFFD3F1E0)),
-          if (showTop)
-            const Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              height: 180,
-              child: SiagaNowHeaderBackground(),
-            ),
-          if (showLandscape)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: footerHeight,
-              child: Image.asset(
-                'assets/images/landscape_background.png',
-                fit: BoxFit.cover,
-                alignment: Alignment.bottomCenter,
-              ),
-            ),
-          if (showLandscape)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: footerHeight,
-              child: const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [Color(0xB3D3F1E0), Color(0x22D3F1E0)],
-                    stops: [0, .58],
-                  ),
-                ),
-              ),
-            ),
-          Positioned(
-            top: showTop ? 180 : 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: const _SiagaNowColorOverlay(),
-          ),
-          child,
-        ],
-      );
-    },
-  );
-}
-
-class _SiagaNowColorOverlay extends StatelessWidget {
-  const _SiagaNowColorOverlay();
-
-  @override
-  Widget build(BuildContext context) => IgnorePointer(
-    child: Opacity(
-      opacity: .30,
-      child: Image.asset(
-        'assets/images/global_color_overlay.png',
-        fit: BoxFit.cover,
-        alignment: Alignment.topCenter,
-        filterQuality: FilterQuality.medium,
-        excludeFromSemantics: true,
-      ),
-    ),
-  );
-}
 
 class _AnimatedTabStack extends StatelessWidget {
   const _AnimatedTabStack({required this.index, required this.children});
@@ -866,77 +701,6 @@ class UserProfile {
   );
 }
 
-class ShelterRecord {
-  const ShelterRecord(
-    this.name,
-    this.address,
-    this.source,
-    this.verifiedAt,
-    this.simulation,
-    this.latitude,
-    this.longitude, {
-    this.id,
-  });
-
-  static const localSimulationFixtures = <ShelterRecord>[
-    ShelterRecord(
-      'Shelter Simulasi SiagaNow',
-      'Area Kuranji, Padang, Sumatera Barat',
-      'Fixture lokal SiagaNow',
-      null,
-      true,
-      -0.9138,
-      100.3974,
-      id: 'siaganow-sim-kuranji-001',
-    ),
-  ];
-  final String? id;
-  final String name;
-  final String address;
-  final String? source;
-  final String? verifiedAt;
-  final bool simulation;
-  final double? latitude;
-  final double? longitude;
-  bool get hasValidCoordinates => latitude != null && longitude != null;
-  factory ShelterRecord.fromJson(
-    Map<String, dynamic> json, {
-    bool simulation = false,
-  }) => ShelterRecord(
-    (json['name'] ?? json['title'] ?? 'Titik informasi').toString(),
-    (json['address'] ?? json['description'] ?? 'Lokasi belum dijelaskan')
-        .toString(),
-    json['source']?.toString(),
-    json['verified_at']?.toString(),
-    simulation ||
-        json['simulation'] == true ||
-        json['is_simulated'] == true ||
-        const {
-          'simulation',
-          'simulated',
-        }.contains(json['data_type']?.toString().toLowerCase()),
-    _coordinate(json['latitude'] ?? json['lat'], -90, 90),
-    _coordinate(json['longitude'] ?? json['lng'] ?? json['lon'], -180, 180),
-    id: json['id']?.toString(),
-  );
-
-  double? distanceFrom(LatLng? location) {
-    if (!hasValidCoordinates || location == null) return null;
-    return const Distance().as(
-      LengthUnit.Kilometer,
-      location,
-      LatLng(latitude!, longitude!),
-    );
-  }
-
-  static double? _coordinate(Object? value, double min, double max) {
-    final parsed = value is num ? value.toDouble() : double.tryParse('$value');
-    return parsed != null && parsed.isFinite && parsed >= min && parsed <= max
-        ? parsed
-        : null;
-  }
-}
-
 class ReportReceipt {
   const ReportReceipt(
     this.id,
@@ -1157,11 +921,13 @@ class SiagaNowApp extends StatefulWidget {
     this.onboardingStore,
     this.tokenReader,
     this.apiService,
+    this.routingService,
   });
 
   final OnboardingProgressStore? onboardingStore;
   final Future<String?> Function()? tokenReader;
   final ApiService? apiService;
+  final RoutingService? routingService;
 
   @override
   State<SiagaNowApp> createState() => _SiagaNowAppState();
@@ -1287,6 +1053,69 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
         ),
       );
     }
+  }
+
+  Future<bool> _sendFamilySafeStatus() async {
+    if (userName == null) return false;
+    final response = await api.get('family-memberships');
+    final memberships =
+        (response['data'] is List ? response['data'] as List : [])
+            .whereType<Map>()
+            .map((value) => Map<String, dynamic>.from(value))
+            .toList();
+    if (memberships.isEmpty) return false;
+    Map<String, dynamic>? membership;
+    if (memberships.length == 1) {
+      membership = memberships.single;
+    } else {
+      final context = navigatorKey.currentContext;
+      if (context == null || !context.mounted) return false;
+      membership = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Pilih keluarga'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              shrinkWrap: true,
+              children: memberships.map((value) {
+                final group = value['group'] is Map
+                    ? Map<String, dynamic>.from(value['group'] as Map)
+                    : const <String, dynamic>{};
+                return ListTile(
+                  title: Text('${group['name'] ?? 'Keluarga Siaga'}'),
+                  subtitle: Text('${value['name'] ?? 'Anggota'}'),
+                  onTap: () => Navigator.pop(dialogContext, value),
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Batal'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (membership == null) return false;
+    final memberId = int.tryParse('${membership['id']}');
+    if (memberId == null) return false;
+    final key = 'family_checkin_pending_$memberId';
+    var requestId = await storage.read(key: key);
+    if (requestId == null) {
+      requestId = List.generate(
+        32,
+        (_) => Random.secure().nextInt(16).toRadixString(16),
+      ).join();
+      await storage.write(key: key, value: requestId);
+    }
+    await api.post('family-members/$memberId/check-in', {
+      'request_id': requestId,
+    });
+    await storage.delete(key: key);
+    return true;
   }
 
   @override
@@ -1494,7 +1323,14 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
                         ),
                       ),
                     ),
-                    ShelterPage(api: api),
+                    ShelterPage(
+                      api: api,
+                      loggedIn: userName != null,
+                      onSendSafeStatus: _sendFamilySafeStatus,
+                      routingService:
+                          widget.routingService ??
+                          const UnavailableRoutingService(),
+                    ),
                     ReportPage(
                       api: api,
                       loggedIn: userName != null,
@@ -1591,7 +1427,7 @@ class _SiagaNowIntroState extends State<SiagaNowIntro> {
     body: Stack(
       fit: StackFit.expand,
       children: [
-        const _SiagaNowColorOverlay(),
+        const SiagaNowColorOverlay(),
         SafeArea(
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
@@ -3259,8 +3095,17 @@ class _WeatherForecastTile extends StatelessWidget {
 }
 
 class ShelterPage extends StatefulWidget {
-  const ShelterPage({super.key, required this.api});
+  const ShelterPage({
+    super.key,
+    required this.api,
+    required this.loggedIn,
+    required this.onSendSafeStatus,
+    this.routingService = const UnavailableRoutingService(),
+  });
   final ApiService api;
+  final bool loggedIn;
+  final Future<bool> Function() onSendSafeStatus;
+  final RoutingService routingService;
   @override
   State<ShelterPage> createState() => _ShelterPageState();
 }
@@ -3469,59 +3314,14 @@ class _ShelterPageState extends State<ShelterPage> {
     if (mapReady) {
       mapController.move(LatLng(place.latitude!, place.longitude!), 14);
     }
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 8, 22, 28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(place.name, style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 8),
-              Text(place.address),
-              const SizedBox(height: 12),
-              if (place.simulation)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const _SimulationNotice(),
-                    const SizedBox(height: 10),
-                    Text('ID pengujian: ${place.id ?? 'tidak tersedia'}'),
-                    Text(
-                      'Koordinat latihan: ${place.latitude!.toStringAsFixed(5)}, ${place.longitude!.toStringAsFixed(5)}',
-                    ),
-                    if (place.distanceFrom(userLocation) case final km?)
-                      Text(
-                        'Jarak garis lurus dari GPS: ${km.toStringAsFixed(1)} km',
-                      )
-                    else
-                      const Text(
-                        'Jarak belum tersedia. Izinkan GPS atau gunakan titik default Padang.',
-                      ),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: () => openSimulationDirections(place),
-                      icon: const Icon(Icons.directions_outlined),
-                      label: const Text('Buka arah ke titik simulasi'),
-                    ),
-                    const Text(
-                      'Arah dibuka di aplikasi peta eksternal. Rute dan waktu tempuh tidak dihitung oleh SiagaNow.',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF596B60)),
-                    ),
-                  ],
-                )
-              else
-                Text(
-                  'Sumber: ${place.source ?? 'tidak tercatat'}\nVerifikasi: ${place.verifiedAt ?? 'belum tercatat'}',
-                ),
-              const SizedBox(height: 12),
-              if (!place.simulation)
-                const Text('Rute dan kapasitas resmi tidak tersedia.'),
-            ],
-          ),
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ShelterDetailPage(
+          shelter: place,
+          userLocation: userLocation,
+          routingService: widget.routingService,
+          loggedIn: widget.loggedIn,
+          onSendSafeStatus: widget.onSendSafeStatus,
         ),
       ),
     );
@@ -3544,319 +3344,354 @@ class _ShelterPageState extends State<ShelterPage> {
   }
 
   @override
-  Widget build(BuildContext context) => RefreshIndicator(
-    onRefresh: load,
-    child: ListView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 112),
-      children: [
-        const Text(
-          'Peta evakuasi',
-          style: TextStyle(fontSize: 27, fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 7),
-        Text(
-          'Jelajahi titik informasi dan rencanakan kesiapsiagaan.',
-          style: TextStyle(color: Colors.blueGrey.shade600),
-        ),
-        if (kDebugMode && shelterSimulationEnabled) ...[
-          const SizedBox(height: 10),
-          const _SimulationNotice(),
-        ],
-        const SizedBox(height: 16),
-        FutureBuilder<FileCacheStore>(
-          future: _tileStore,
-          builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return _mapUnavailable('Penyimpanan peta tidak dapat disiapkan.');
-            }
-            if (!snapshot.hasData) {
-              return const SizedBox(
-                height: 300,
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            final markers = <Marker>[
-              for (final shelter in realShelters)
-                Marker(
-                  point: LatLng(shelter.latitude!, shelter.longitude!),
-                  width: 48,
-                  height: 52,
-                  child: IconButton(
-                    tooltip: shelter.name,
-                    onPressed: () => showShelter(shelter),
-                    icon: const Icon(
-                      Icons.location_on,
-                      size: 42,
-                      color: Color(0xFF145B45),
-                    ),
-                  ),
-                ),
-              if (kDebugMode && shelterSimulationEnabled)
-                for (final shelter in places.where(
-                  (place) => place.simulation && place.hasValidCoordinates,
-                ))
+  Widget build(BuildContext context) {
+    final sortedPlaces = [...places];
+    if (userLocation != null) {
+      sortedPlaces.sort((left, right) {
+        final leftDistance = left.distanceFrom(userLocation);
+        final rightDistance = right.distanceFrom(userLocation);
+        if (leftDistance == null) return rightDistance == null ? 0 : 1;
+        if (rightDistance == null) return -1;
+        return leftDistance.compareTo(rightDistance);
+      });
+    }
+    final nearestVerified = userLocation == null
+        ? null
+        : sortedPlaces
+              .where((place) => place.isVerified && place.hasValidCoordinates)
+              .firstOrNull;
+    return RefreshIndicator(
+      onRefresh: load,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 112),
+        children: [
+          const Text(
+            'Rute Evakuasi',
+            style: TextStyle(fontSize: 27, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            'Jelajahi titik informasi dan rencanakan kesiapsiagaan.',
+            style: TextStyle(color: Colors.blueGrey.shade600),
+          ),
+          if (kDebugMode && shelterSimulationEnabled) ...[
+            const SizedBox(height: 10),
+            const _SimulationNotice(),
+          ],
+          const SizedBox(height: 16),
+          FutureBuilder<FileCacheStore>(
+            future: _tileStore,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return _mapUnavailable(
+                  'Penyimpanan peta tidak dapat disiapkan.',
+                );
+              }
+              if (!snapshot.hasData) {
+                return const SizedBox(
+                  height: 300,
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              final markers = <Marker>[
+                for (final shelter in realShelters)
                   Marker(
                     point: LatLng(shelter.latitude!, shelter.longitude!),
-                    width: 52,
-                    height: 54,
+                    width: 48,
+                    height: 52,
                     child: IconButton(
-                      tooltip: '${shelter.name} · simulasi',
+                      tooltip: shelter.name,
                       onPressed: () => showShelter(shelter),
                       icon: const Icon(
                         Icons.location_on,
-                        size: 44,
-                        color: Color(0xFFE69B22),
+                        size: 42,
+                        color: Color(0xFF145B45),
                       ),
                     ),
                   ),
-              if (userLocation != null)
-                Marker(
-                  point: userLocation!,
-                  width: 44,
-                  height: 44,
-                  child: const Icon(
-                    Icons.my_location,
-                    size: 30,
-                    color: Colors.blue,
-                  ),
-                ),
-            ];
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(
-                SiagaNowSurfaceTokens.cardRadius,
-              ),
-              child: SizedBox(
-                height: 300,
-                child: Stack(
-                  children: [
-                    FlutterMap(
-                      mapController: mapController,
-                      options: MapOptions(
-                        initialCenter: _initialCenter,
-                        initialZoom: kDebugMode && shelterSimulationEnabled
-                            ? 10
-                            : 12,
-                        onMapReady: () {
-                          if (!mounted) return;
-                          setState(() => mapReady = true);
-                          if (!initialLocationRequested) {
-                            initialLocationRequested = true;
-                            unawaited(useCurrentLocation(initialRequest: true));
-                          }
-                        },
-                        onPositionChanged: (camera, hasGesture) {
-                          if (hasGesture) {
-                            lastSelectedLocation = camera.center;
-                          }
-                        },
+                if (kDebugMode && shelterSimulationEnabled)
+                  for (final shelter in places.where(
+                    (place) => place.simulation && place.hasValidCoordinates,
+                  ))
+                    Marker(
+                      point: LatLng(shelter.latitude!, shelter.longitude!),
+                      width: 52,
+                      height: 54,
+                      child: IconButton(
+                        tooltip: '${shelter.name} · simulasi',
+                        onPressed: () => showShelter(shelter),
+                        icon: const Icon(
+                          Icons.location_on,
+                          size: 44,
+                          color: Color(0xFFE69B22),
+                        ),
                       ),
-                      children: [
-                        TileLayer(
-                          urlTemplate: mapTileUrl,
-                          userAgentPackageName: 'com.example.siaga_now_mobile',
-                          tileProvider: CachedTileProvider(
-                            store: snapshot.data!,
-                            headers: {'User-Agent': appUserAgent},
-                            cachePolicy: CachePolicy.request,
-                            maxStale: const Duration(days: 30),
-                            hitCacheOnNetworkFailure: true,
-                          ),
-                          errorTileCallback: (_, _, _) {
-                            if (!tileFailed && mounted) {
-                              setState(() => tileFailed = true);
+                    ),
+                if (userLocation != null)
+                  Marker(
+                    point: userLocation!,
+                    width: 44,
+                    height: 44,
+                    child: const Icon(
+                      Icons.my_location,
+                      size: 30,
+                      color: Colors.blue,
+                    ),
+                  ),
+              ];
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(
+                  SiagaNowSurfaceTokens.cardRadius,
+                ),
+                child: SizedBox(
+                  height: 300,
+                  child: Stack(
+                    children: [
+                      FlutterMap(
+                        mapController: mapController,
+                        options: MapOptions(
+                          initialCenter: _initialCenter,
+                          initialZoom: kDebugMode && shelterSimulationEnabled
+                              ? 10
+                              : 12,
+                          onMapReady: () {
+                            if (!mounted) return;
+                            setState(() => mapReady = true);
+                            if (!initialLocationRequested) {
+                              initialLocationRequested = true;
+                              unawaited(
+                                useCurrentLocation(initialRequest: true),
+                              );
+                            }
+                          },
+                          onPositionChanged: (camera, hasGesture) {
+                            if (hasGesture) {
+                              lastSelectedLocation = camera.center;
                             }
                           },
                         ),
-                        MarkerLayer(markers: markers),
-                        RichAttributionWidget(
-                          alignment: AttributionAlignment.bottomRight,
-                          attributions: [
-                            TextSourceAttribution(
-                              '© OpenStreetMap contributors',
-                              onTap: () => launchUrl(
-                                Uri.parse(
-                                  'https://www.openstreetmap.org/copyright',
+                        children: [
+                          TileLayer(
+                            urlTemplate: mapTileUrl,
+                            userAgentPackageName:
+                                'com.example.siaga_now_mobile',
+                            tileProvider: CachedTileProvider(
+                              store: snapshot.data!,
+                              headers: {'User-Agent': appUserAgent},
+                              cachePolicy: CachePolicy.request,
+                              maxStale: const Duration(days: 30),
+                              hitCacheOnNetworkFailure: true,
+                            ),
+                            errorTileCallback: (_, _, _) {
+                              if (!tileFailed && mounted) {
+                                setState(() => tileFailed = true);
+                              }
+                            },
+                          ),
+                          MarkerLayer(markers: markers),
+                          RichAttributionWidget(
+                            alignment: AttributionAlignment.bottomRight,
+                            attributions: [
+                              TextSourceAttribution(
+                                '© OpenStreetMap contributors',
+                                onTap: () => launchUrl(
+                                  Uri.parse(
+                                    'https://www.openstreetmap.org/copyright',
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    Positioned(
-                      right: 10,
-                      top: 10,
-                      child: Column(
-                        children: [
-                          FloatingActionButton.small(
-                            heroTag: 'map-zoom-in',
-                            onPressed: () => mapController.move(
-                              mapController.camera.center,
-                              mapController.camera.zoom + 1,
-                            ),
-                            child: const Icon(Icons.add),
-                          ),
-                          const SizedBox(height: 6),
-                          FloatingActionButton.small(
-                            heroTag: 'map-zoom-out',
-                            onPressed: () => mapController.move(
-                              mapController.camera.center,
-                              mapController.camera.zoom - 1,
-                            ),
-                            child: const Icon(Icons.remove),
-                          ),
-                          const SizedBox(height: 6),
-                          FloatingActionButton.small(
-                            heroTag: 'map-my-location',
-                            onPressed: locationLoading
-                                ? null
-                                : useCurrentLocation,
-                            child: locationLoading
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.my_location),
+                            ],
                           ),
                         ],
                       ),
-                    ),
-                    if (tileFailed)
-                      const Positioned(
-                        left: 8,
-                        top: 8,
-                        right: 64,
-                        child: Material(
-                          color: Color(0xFFF8E9D8),
-                          child: Padding(
-                            padding: EdgeInsets.all(8),
-                            child: Text(
-                              'Sebagian peta gagal dimuat. Coba lagi saat jaringan tersedia.',
-                              style: TextStyle(fontSize: 11),
+                      Positioned(
+                        right: 10,
+                        top: 10,
+                        child: Column(
+                          children: [
+                            FloatingActionButton.small(
+                              heroTag: 'map-zoom-in',
+                              onPressed: () => mapController.move(
+                                mapController.camera.center,
+                                mapController.camera.zoom + 1,
+                              ),
+                              child: const Icon(Icons.add),
+                            ),
+                            const SizedBox(height: 6),
+                            FloatingActionButton.small(
+                              heroTag: 'map-zoom-out',
+                              onPressed: () => mapController.move(
+                                mapController.camera.center,
+                                mapController.camera.zoom - 1,
+                              ),
+                              child: const Icon(Icons.remove),
+                            ),
+                            const SizedBox(height: 6),
+                            FloatingActionButton.small(
+                              heroTag: 'map-my-location',
+                              onPressed: locationLoading
+                                  ? null
+                                  : useCurrentLocation,
+                              child: locationLoading
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.my_location),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (tileFailed)
+                        const Positioned(
+                          left: 8,
+                          top: 8,
+                          right: 64,
+                          child: Material(
+                            color: Color(0xFFF8E9D8),
+                            child: Padding(
+                              padding: EdgeInsets.all(8),
+                              child: Text(
+                                'Sebagian peta gagal dimuat. Coba lagi saat jaringan tersedia.',
+                                style: TextStyle(fontSize: 11),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+          FilledButton.icon(
+            onPressed: nearestVerified == null
+                ? null
+                : () => showShelter(nearestVerified),
+            icon: const Icon(Icons.route_outlined),
+            label: const Text('Cari Shelter Terdekat'),
+          ),
+          const Text(
+            'Urutan hanya berdasarkan jarak lurus dari GPS. Layanan rute belum tersedia dan informasi ini bukan jaminan keselamatan.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11, color: Color(0xFF596B60)),
+          ),
+          const SizedBox(height: 7),
+          const Text(
+            'Peta dapat digeser dan diperbesar. © OpenStreetMap contributors',
+            style: TextStyle(fontSize: 11),
+          ),
+          if (locationMessage != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      locationMessage!,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  if (locationPermissionPermanentlyDenied)
+                    TextButton(
+                      onPressed: openLocationSettings,
+                      child: const Text('Pengaturan'),
+                    ),
+                ],
               ),
-            );
-          },
-        ),
-        const SizedBox(height: 7),
-        const Text(
-          'Peta dapat digeser dan diperbesar. © OpenStreetMap contributors',
-          style: TextStyle(fontSize: 11),
-        ),
-        if (locationMessage != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 7),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Text(
-                    locationMessage!,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                if (locationPermissionPermanentlyDenied)
-                  TextButton(
-                    onPressed: openLocationSettings,
-                    child: const Text('Pengaturan'),
-                  ),
-              ],
+            )
+          else if (userLocation == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Text(
+                lastSelectedLocation == null
+                    ? 'Lokasi default Padang; bukan posisi Anda. Gunakan tombol lokasi untuk mencoba GPS.'
+                    : 'Menampilkan lokasi peta terakhir; bukan posisi GPS Anda.',
+                style: const TextStyle(fontSize: 12),
+              ),
             ),
-          )
-        else if (userLocation == null)
-          Padding(
-            padding: const EdgeInsets.only(top: 7),
-            child: Text(
-              lastSelectedLocation == null
-                  ? 'Lokasi default Padang; bukan posisi Anda. Gunakan tombol lokasi untuk mencoba GPS.'
-                  : 'Menampilkan lokasi peta terakhir; bukan posisi GPS Anda.',
-              style: const TextStyle(fontSize: 12),
+          const SizedBox(height: 8),
+          const Text(
+            'Rute evakuasi resmi dan zona aman belum tersedia. Jangan gunakan peta ini sebagai panduan rute darurat.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF745B2A)),
+          ),
+          const SizedBox(height: 15),
+          TextField(
+            controller: search,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) => load(),
+            decoration: InputDecoration(
+              labelText: 'Cari shelter berdasarkan nama/alamat',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                onPressed: loading ? null : load,
+                icon: const Icon(Icons.search),
+              ),
             ),
           ),
-        const SizedBox(height: 8),
-        const Text(
-          'Rute evakuasi resmi dan zona aman belum tersedia. Jangan gunakan peta ini sebagai panduan rute darurat.',
-          style: TextStyle(fontSize: 12, color: Color(0xFF745B2A)),
-        ),
-        const SizedBox(height: 15),
-        TextField(
-          controller: search,
-          textInputAction: TextInputAction.search,
-          onSubmitted: (_) => load(),
-          decoration: InputDecoration(
-            labelText: 'Cari shelter berdasarkan nama/alamat',
-            border: const OutlineInputBorder(),
-            suffixIcon: IconButton(
-              onPressed: loading ? null : load,
-              icon: const Icon(Icons.search),
-            ),
-          ),
-        ),
-        const SizedBox(height: 19),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text(
-              'Shelter tersedia',
-              style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
-            ),
-            IconButton(
-              onPressed: loading ? null : load,
-              icon: const Icon(Icons.refresh),
-            ),
-          ],
-        ),
-        if (issue != null) _InlineError(issue!),
-        if (loading)
-          const _LoadingSkeleton(rows: 3)
-        else if (places.isEmpty)
-          _EmptyState(text: issue ?? 'Belum ada tempat yang tercatat.')
-        else
-          ...places.map((p) {
-            final simulated = p.simulation;
-            final distanceFromGps = p.distanceFrom(userLocation);
-            return Card(
-              margin: const EdgeInsets.only(bottom: 10),
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: simulated
-                      ? const Color(0xFFFFF2D5)
-                      : const Color(0xFFE7F1EA),
-                  child: Icon(
-                    Icons.place_outlined,
-                    color: simulated
-                        ? const Color(0xFFB8740B)
-                        : const Color(0xFF145B45),
-                  ),
-                ),
-                title: Text(
-                  p.name,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  '${p.address}${distanceFromGps == null ? '' : '\n${distanceFromGps.toStringAsFixed(1)} km dari GPS'}\n${simulated ? 'SIMULASI — BUKAN SHELTER RESMI' : '${p.source ?? 'Sumber tidak tercatat'} · ${p.verifiedAt == null ? 'Belum diverifikasi' : 'Diverifikasi ${p.verifiedAt}'}'}',
-                ),
-                isThreeLine: true,
-                trailing: Icon(
-                  p.hasValidCoordinates && !simulated
-                      ? Icons.near_me
-                      : Icons.info_outline,
-                ),
-                onTap: () => showShelter(p),
+          const SizedBox(height: 19),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Evakuasi Terdekat',
+                style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
               ),
-            );
-          }),
-      ],
-    ),
-  );
+              IconButton(
+                onPressed: loading ? null : load,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          if (issue != null) _InlineError(issue!),
+          if (loading)
+            const _LoadingSkeleton(rows: 3)
+          else if (places.isEmpty)
+            _EmptyState(text: issue ?? 'Belum ada tempat yang tercatat.')
+          else
+            ...sortedPlaces.map((p) {
+              final simulated = p.simulation;
+              final distanceFromGps = p.distanceFrom(userLocation);
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: simulated
+                        ? const Color(0xFFFFF2D5)
+                        : const Color(0xFFE7F1EA),
+                    child: Icon(
+                      Icons.place_outlined,
+                      color: simulated
+                          ? const Color(0xFFB8740B)
+                          : const Color(0xFF145B45),
+                    ),
+                  ),
+                  title: Text(
+                    p.name,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: Text(
+                    '${p.address}${distanceFromGps == null ? '' : '\n${distanceFromGps.toStringAsFixed(1)} km dari GPS'}\n${simulated ? 'SIMULASI — BUKAN SHELTER RESMI' : '${p.source ?? 'Sumber tidak tercatat'} · ${p.verifiedAt == null ? 'Belum diverifikasi' : 'Diverifikasi ${p.verifiedAt}'}'}',
+                  ),
+                  isThreeLine: true,
+                  trailing: Icon(
+                    p.hasValidCoordinates && !simulated
+                        ? Icons.near_me
+                        : Icons.info_outline,
+                  ),
+                  onTap: () => showShelter(p),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
 }
 
 class ReportPage extends StatefulWidget {
@@ -4487,7 +4322,7 @@ class ReportSuccessPage extends StatelessWidget {
                 ),
               ),
             ),
-            const _SiagaNowColorOverlay(),
+            const SiagaNowColorOverlay(),
             SafeArea(
               child: Stack(
                 children: [

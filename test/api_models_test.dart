@@ -65,16 +65,23 @@ void main() {
         'name': 'Shelter nyata',
         'latitude': '-0.95',
         'longitude': 100.4,
+        'verified_at': '2026-11-16T09:00:00+07:00',
+        'capacity': 120,
+        'status': 'available',
       });
       expect(valid.hasValidCoordinates, isTrue);
       expect(valid.latitude, -0.95);
       expect(valid.longitude, 100.4);
+      expect(valid.isVerified, isTrue);
+      expect(valid.capacity, 120);
+      expect(valid.status, 'available');
 
       final invalid = ShelterRecord.fromJson({
         'latitude': 91,
         'longitude': 'unknown',
       });
       expect(invalid.hasValidCoordinates, isFalse);
+      expect(invalid.isVerified, isFalse);
     });
 
     test('local shelter QA fixture is one explicit Kuranji simulation', () {

@@ -186,6 +186,7 @@ void main() {
             api: api,
             locationProvider: provider,
             onSelectTab: (_) {},
+            onOpenNews: () {},
             onOpenFamily: () {},
           ),
         ),

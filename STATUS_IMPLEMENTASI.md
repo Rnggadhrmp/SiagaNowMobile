@@ -252,3 +252,14 @@ Catatan ini melengkapi dan tidak menggantikan riwayat terdahulu di `IMPLEMENTATI
 - **Validasi Tahap 17:** `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (42 test); `git diff --check` bersih. Pemeriksaan diff untuk dokumen baru menggunakan intent-to-add agar Git memeriksa isi file.
 - **APK dan QA visual emulator:** build dan pemasangan APK tidak dijalankan pada tahap audit-only; pemeriksaan emulator seluruh layar dijadwalkan untuk Tahap 24. QA emulator profil dari Tahap 16 masih tertunda karena emulator tidak memiliki sesi akun.
 - **Status:** audit selesai; 22/22 frame terbaca. Belum ada perubahan kode pada tahap ini.
+
+## Tahap 18 — Navigasi utama 5 tab (implementasi)
+
+**Tanggal:** 16 November 2026
+
+- **Perubahan:** urutan tab kini Beranda, Rute Evakuasi, Laporkan Bencana, Donasi, dan Layanan Darurat. Glass bar dipertahankan; indikator aktif memakai `#01543F` dengan ikon putih, label kecil tetap terlihat, dan nama aksesibilitas menyebut nama destinasi lengkap. `extendBody` dipertahankan.
+- **Akses fitur:** Berita dibuka sebagai halaman tersendiri dari kartu berita Beranda; tab Donasi dan Layanan Darurat menampilkan konten di dalam kerangka utama. Profil menyediakan pintu ke Layanan lainnya, sehingga Keluarga Siaga dan Penilaian Risiko tetap dapat dijangkau. Profil tetap di avatar.
+- **Responsif:** header merek diringkas supaya tidak overflow pada layar sempit dengan skala teks besar.
+- **File diubah tahap ini:** `lib/main.dart`, `test/feature_lifecycle_layout_test.dart`, `test/location_warning_test.dart`, dan dokumen status ini.
+- **Pengujian widget:** test baru memeriksa tab dan status terpilih pada 320×640 dan 360×740 dengan text scale 1,5. `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (43 test); `git diff --check` tidak menemukan whitespace error (Git hanya memberi peringatan konversi LF ke CRLF pada dokumen).
+- **Kendala/belum selesai:** layar Rute, Laporan, Donasi, dan Kontak masih mengikuti implementasi lama sampai tahap masing-masing. Build APK dan visual emulator belum dijalankan; ditangani pada Tahap 24. Karena `lib/main.dart` dan test telah memuat pekerjaan terdahulu yang belum di-commit dan dependensi foto profil pendukungnya belum terlacak, commit tahap ini juga akan mengamankan baseline tersebut agar source tetap buildable; artefak screenshot tidak disertakan.

@@ -42,9 +42,11 @@ dependencies:
   flutter_map: 8.3.2
   flutter_map_cache: 2.1.0
   http_cache_file_store: 2.0.2
+  image_picker: ^1.2.4
   path_provider: 2.1.6
   latlong2: 0.10.1
   flutter_local_notifications: 19.5.0
+  flutter_svg: ^2.2.0
   timezone: 0.10.1
   flutter_timezone: 5.1.0
   shared_preferences: 2.5.6
@@ -74,6 +76,7 @@ flutter:
   assets:
     - assets/images/
     - assets/illustrations/
+    - assets/figma/report/
 
   fonts:
     - family: Poppins

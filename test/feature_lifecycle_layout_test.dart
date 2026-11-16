@@ -11,6 +11,15 @@ ApiService _api() => ApiService(
   const FlutterSecureStorage(),
   client: MockClient((request) async {
     final payload = switch (request.url.path) {
+      '/api/user' => {
+        'data': {
+          'id': 42,
+          'name': 'Ayu API',
+          'email': 'ayu@example.test',
+          'phone': '+628123456789',
+          'address': 'Kuranji, Padang',
+        },
+      },
       '/api/family-groups' => {'data': <Object>[]},
       '/api/family-memberships' => {'data': <Object>[]},
       '/api/risk-assessments' => {'data': <Object>[]},
@@ -20,6 +29,37 @@ ApiService _api() => ApiService(
     return http.Response(jsonEncode(payload), status);
   }),
   tokenReader: () async => 'widget-test-token',
+);
+
+class _CompletedOnboardingStore implements OnboardingProgressStore {
+  @override
+  Future<bool> isComplete() async => true;
+
+  @override
+  Future<void> markComplete() async {}
+}
+
+ApiService _navigationApi() => ApiService(
+  const FlutterSecureStorage(),
+  client: MockClient((request) async {
+    final payload = switch (request.url.path) {
+      '/api/home' => {
+        'data_type': 'unavailable',
+        'weather': <String, dynamic>{},
+        'weather_forecast': {'forecasts': <Object>[]},
+        'statistics': <String, dynamic>{},
+        'warning': {'status': 'unknown', 'active': false},
+      },
+      '/api/news' => {'data': <Object>[], 'data_type': 'unavailable'},
+      '/api/shelters' => {'data': <Object>[], 'data_type': 'database'},
+      _ => {'message': 'Unexpected test request'},
+    };
+    return http.Response(
+      jsonEncode(payload),
+      payload.containsKey('message') ? 404 : 200,
+    );
+  }),
+  tokenReader: () async => null,
 );
 
 ApiService _familyApi({int createStatus = 201}) {
@@ -71,6 +111,25 @@ ApiService _familyApi({int createStatus = 201}) {
   );
 }
 
+ApiService _reportSubmissionApi({required bool includeReportId}) => ApiService(
+  const FlutterSecureStorage(),
+  client: MockClient((request) async {
+    if (request.method == 'GET' && request.url.path == '/api/reports') {
+      return http.Response(jsonEncode({'data': <Object>[]}), 200);
+    }
+    if (request.method == 'POST' && request.url.path == '/api/reports') {
+      return http.Response(
+        jsonEncode({
+          'data': {if (includeReportId) 'id': 73, 'status': 'submitted'},
+        }),
+        201,
+      );
+    }
+    return http.Response(jsonEncode({'message': 'Unexpected request'}), 404);
+  }),
+  tokenReader: () async => 'widget-test-token',
+);
+
 Future<void> _openFamily(WidgetTester tester, ApiService api) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -99,6 +158,82 @@ Future<void> _openFamily(WidgetTester tester, ApiService api) async {
 }
 
 void main() {
+  testWidgets(
+    'five primary tabs stay readable and track selection on compact screens',
+    (tester) async {
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      for (final size in const [Size(320, 640), Size(360, 740)]) {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = size;
+        await tester.pumpWidget(
+          MediaQuery(
+            data: MediaQueryData(
+              size: size,
+              textScaler: const TextScaler.linear(1.5),
+            ),
+            child: SiagaNowApp(
+              onboardingStore: _CompletedOnboardingStore(),
+              tokenReader: () async => null,
+              apiService: _navigationApi(),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics &&
+                widget.properties.label == 'Rute Evakuasi',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics &&
+                widget.properties.label == 'Laporkan Bencana',
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('Rute'), findsOneWidget);
+        expect(find.text('Laporan'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+
+        await tester.tap(find.text('Donasi'));
+        await tester.pumpAndSettle();
+        expect(find.text('Dukungan untuk kesiapsiagaan'), findsOneWidget);
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics &&
+                widget.properties.label == 'Donasi' &&
+                widget.properties.selected == true,
+          ),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.text('Darurat'));
+        await tester.pumpAndSettle();
+        expect(find.text('Layanan darurat'), findsOneWidget);
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics &&
+                widget.properties.label == 'Layanan Darurat' &&
+                widget.properties.selected == true,
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
+
   testWidgets(
     'Family route loads empty state and returns without lifecycle error',
     (tester) async {
@@ -265,4 +400,305 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'profile keeps API values visible on compact and standard phones',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+
+      for (final viewport in [const Size(320, 640), const Size(402, 874)]) {
+        tester.view.physicalSize = viewport;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ProfilePage(
+              api: _api(),
+              onLogin: () {},
+              onLogout: () async {},
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Ayu API'), findsOneWidget);
+        expect(find.text('ayu@example.test'), findsOneWidget);
+        expect(find.text('+628123456789'), findsOneWidget);
+        expect(find.text('Kuranji, Padang'), findsOneWidget);
+        expect(find.text('Laporan Bencana Saya'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
+
+  testWidgets('profile uses the home header above normally scrolling content', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(402, 874);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProfilePage(api: _api(), onLogin: () {}, onLogout: () async {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    const appBarKey = ValueKey('profile.standard-appbar');
+    const bodyKey = ValueKey('profile.scroll-background');
+    const waveKey = ValueKey('siaganow.header.wave');
+    const overlayKey = ValueKey('siaganow.header.green-overlay');
+    const content = ValueKey('profile.scroll-content');
+    final appBarFinder = find.byKey(appBarKey);
+    final bodyFinder = find.byKey(bodyKey);
+    final waveFinder = find.byKey(waveKey);
+    final overlayFinder = find.byKey(overlayKey);
+    final contentFinder = find.byKey(content);
+    final appBarPosition = tester.getRect(appBarFinder);
+    final bodyPosition = tester.getRect(bodyFinder);
+    final wavePosition = tester.getRect(waveFinder);
+    final overlayPosition = tester.getRect(overlayFinder);
+    final appBar = tester.widget<AppBar>(appBarFinder);
+    final menuFinder = find.text('Informasi Donasi');
+    final menuPosition = tester.getTopLeft(menuFinder);
+    final overlayOpacity = tester.widget<Opacity>(
+      find.descendant(of: overlayFinder, matching: find.byType(Opacity)),
+    );
+    final scrollableFinder = find.descendant(
+      of: contentFinder,
+      matching: find.byType(Scrollable),
+    );
+    final scrollable = tester.state<ScrollableState>(scrollableFinder.first);
+
+    expect(appBar.toolbarHeight, 92);
+    expect(scrollable.position.pixels, 0);
+    expect(
+      find.byKey(const ValueKey('profile.fixed-background')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('profile.fixed-header')), findsNothing);
+    expect(wavePosition, overlayPosition);
+    expect(overlayOpacity.opacity, .5);
+    expect(
+      tester.getTopLeft(contentFinder).dy,
+      greaterThanOrEqualTo(appBarPosition.bottom),
+    );
+    await tester.drag(contentFinder, const Offset(0, -720));
+    await tester.pumpAndSettle();
+
+    expect(scrollable.position.pixels, greaterThan(0));
+    expect(tester.getRect(appBarFinder), appBarPosition);
+    expect(tester.getRect(bodyFinder), bodyPosition);
+    expect(tester.getRect(waveFinder), wavePosition);
+    expect(tester.getRect(overlayFinder), overlayPosition);
+    expect(tester.getTopLeft(menuFinder), isNot(menuPosition));
+    expect(find.text('Tentang SiagaNow'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('header wave tint stays aligned behind scrolling content', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(402, 874);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              const Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 180,
+                child: SiagaNowHeaderBackground(),
+              ),
+              Positioned.fill(
+                child: ListView(
+                  key: const ValueKey('header-scroll-content'),
+                  children: [
+                    for (var index = 0; index < 12; index++)
+                      Container(
+                        key: ValueKey('header-scroll-card-$index'),
+                        height: 120,
+                        margin: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+                        color: Colors.white,
+                        child: Center(child: Text('Kartu $index')),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final wave = find.byKey(const ValueKey('siaganow.header.wave'));
+    final overlay = find.byKey(const ValueKey('siaganow.header.green-overlay'));
+    final firstCard = find.byKey(const ValueKey('header-scroll-card-2'));
+    final wavePosition = tester.getRect(wave);
+    final overlayPosition = tester.getRect(overlay);
+    final cardPosition = tester.getTopLeft(firstCard);
+    final overlayOpacity = tester.widget<Opacity>(
+      find.descendant(of: overlay, matching: find.byType(Opacity)),
+    );
+
+    expect(wavePosition, overlayPosition);
+    expect(overlayOpacity.opacity, .5);
+    await tester.drag(
+      find.byKey(const ValueKey('header-scroll-content')),
+      const Offset(0, -220),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.getRect(wave), wavePosition);
+    expect(tester.getRect(overlay), overlayPosition);
+    expect(tester.getTopLeft(firstCard), isNot(cardPosition));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('report success requires a server report identifier', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(402, 874);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    for (final includeReportId in [false, true]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ReportPage(
+              api: _reportSubmissionApi(includeReportId: includeReportId),
+              loggedIn: true,
+              onLogin: () async {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.drag(find.byType(ListView).first, const Offset(0, -420));
+      await tester.pumpAndSettle();
+      final fields = find.byType(TextFormField);
+      await tester.enterText(fields.at(0), 'Laporan banjir uji');
+      await tester.enterText(fields.at(1), '-0.95');
+      await tester.enterText(fields.at(2), '100.4');
+      await tester.enterText(fields.at(5), 'Air menggenangi jalan utama.');
+      await tester.ensureVisible(find.text('Kirim laporan'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Kirim laporan'));
+      await tester.pump();
+      if (includeReportId) {
+        await tester.pumpAndSettle();
+      } else {
+        await tester.pump(const Duration(milliseconds: 400));
+      }
+
+      if (includeReportId) {
+        expect(find.text('Laporan Tersimpan'), findsOneWidget);
+      } else {
+        expect(find.text('Laporan Tersimpan'), findsNothing);
+        expect(
+          tester.widget<TextFormField>(fields.at(0)).controller!.text,
+          'Laporan banjir uji',
+        );
+        expect(
+          find.text(
+            'Server belum mengonfirmasi bahwa laporan berhasil disimpan.',
+          ),
+          findsOneWidget,
+        );
+      }
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('report success fits a compact phone and labels local fixtures', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 740);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReportSuccessPage(
+          onReturnHome: () {},
+          shelter: ReportShelterInfo(
+            name: 'Contoh Shelter Kuranji',
+            location: 'Area Kuranji · titik koordinat latihan',
+            simulation: true,
+            distanceKm: 1.2,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Laporan Tersimpan'), findsOneWidget);
+    expect(find.text('SHELTER SIMULASI'), findsOneWidget);
+    expect(find.textContaining('1.2 km'), findsOneWidget);
+    expect(find.text('Kembali Ke Beranda'), findsOneWidget);
+    expect(
+      tester.getRect(find.text('Kembali Ke Beranda')).bottom,
+      lessThan(740),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('report status keeps its header fixed while content scrolls', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 560);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReportSuccessPage(
+          onReturnHome: () {},
+          shelter: ReportShelterInfo(
+            name: 'Titik simulasi uji',
+            location: List.filled(18, 'Informasi lokasi contoh').join(' '),
+            simulation: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    const header = ValueKey('report-status.fixed-header');
+    final headerPosition = tester.getRect(find.byKey(header));
+    final contentPosition = tester.getTopLeft(find.text('Laporan Tersimpan'));
+    final scrollableFinder = find.descendant(
+      of: find.byType(SingleChildScrollView),
+      matching: find.byType(Scrollable),
+    );
+    final scrollable = tester.state<ScrollableState>(scrollableFinder.first);
+
+    expect(scrollable.position.maxScrollExtent, greaterThan(0));
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(0, -240),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.getRect(find.byKey(header)), headerPosition);
+    expect(
+      tester.getTopLeft(find.text('Laporan Tersimpan')),
+      isNot(contentPosition),
+    );
+    expect(tester.takeException(), isNull);
+  });
 }

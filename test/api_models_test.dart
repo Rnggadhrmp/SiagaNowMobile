@@ -64,11 +64,82 @@ void main() {
       expect(invalid.hasValidCoordinates, isFalse);
     });
 
+    test('local shelter QA fixture is one explicit Kuranji simulation', () {
+      final fixtures = ShelterRecord.localSimulationFixtures;
+      expect(fixtures, hasLength(1));
+      final shelter = fixtures.single;
+      expect(shelter.id, 'siaganow-sim-kuranji-001');
+      expect(shelter.name, 'Shelter Simulasi SiagaNow');
+      expect(shelter.address, 'Area Kuranji, Padang, Sumatera Barat');
+      expect(shelter.simulation, isTrue);
+      expect(shelter.source, 'Fixture lokal SiagaNow');
+      expect(shelter.latitude, -0.9138);
+      expect(shelter.longitude, 100.3974);
+      expect(shelter.hasValidCoordinates, isTrue);
+    });
+
     test('parses the report identifier and actual status', () {
       final receipt = ReportReceipt.fromJson({'id': 17, 'status': 'submitted'});
       expect(receipt.id, 17);
       expect(receipt.status, 'submitted');
       expect(receipt.message, contains('#17'));
+    });
+
+    test('rejects a report receipt without a server report identifier', () {
+      expect(
+        () => ReportReceipt.fromJson({'status': 'submitted'}),
+        throwsA(isA<ApiException>()),
+      );
+    });
+
+    test('keeps YOLO analysis status distinct from official report status', () {
+      final receipt = ReportReceipt.fromJson({
+        'id': 21,
+        'status': 'submitted',
+        'ai_analysis': {
+          'status': 'pending',
+          'verification_status': 'pending',
+          'service_status': 'not_configured',
+        },
+      });
+      expect(receipt.status, 'submitted');
+      expect(receipt.aiAnalysis?.label, 'Model YOLO belum terhubung');
+      expect(
+        receipt.aiAnalysis?.verificationLabel,
+        'Menunggu verifikasi admin',
+      );
+    });
+
+    test('shows only explicitly verified non-simulation report shelters', () {
+      final verified = ReportReceipt.fromJson({
+        'id': 18,
+        'status': 'submitted',
+        'shelter': {
+          'name': 'Shelter Kuranji',
+          'address': 'Kuranji, Padang',
+          'data_type': 'actual',
+          'verified_at': '2026-11-16T09:00:00+07:00',
+        },
+      });
+      expect(verified.shelter?.name, 'Shelter Kuranji');
+      expect(verified.shelter?.location, 'Kuranji, Padang');
+
+      final simulation = ReportReceipt.fromJson({
+        'id': 19,
+        'shelter': {
+          'name': 'Contoh shelter',
+          'address': 'Padang',
+          'data_type': 'simulation',
+          'verified_at': '2026-11-16T09:00:00+07:00',
+        },
+      });
+      expect(simulation.shelter, isNull);
+
+      final unverified = ReportReceipt.fromJson({
+        'id': 20,
+        'shelter': {'name': 'Shelter belum terverifikasi'},
+      });
+      expect(unverified.shelter, isNull);
     });
 
     test('parses BMKG forecast fields without assuming missing values', () {

@@ -65,4 +65,30 @@ void main() {
     await tester.pumpAndSettle();
     expect(finished, isTrue);
   });
+
+  testWidgets('halaman sukses laporan menampilkan CTA yang berfungsi', (
+    tester,
+  ) async {
+    var returnedHome = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ReportSuccessPage(onReturnHome: () => returnedHome = true),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Laporan Tersimpan'), findsOneWidget);
+    expect(
+      find.text(
+        'Laporan berhasil dikirim dan sedang diproses oleh tim terkait.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Shelter Kuranji'), findsNothing);
+
+    await tester.tap(find.text('Kembali Ke Beranda'));
+    await tester.pump();
+    expect(returnedHome, isTrue);
+    expect(tester.takeException(), isNull);
+  });
 }

@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,7 +16,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_map_cache/flutter_map_cache.dart';
@@ -25,9 +27,14 @@ import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 import 'location_warning.dart';
+import 'services/profile_photo_service.dart';
 
 const apiOverride = String.fromEnvironment('SIAGANOW_API_URL');
 const demoMode = bool.fromEnvironment('SIAGANOW_DEMO_MODE', defaultValue: true);
+const shelterSimulationEnabled = bool.fromEnvironment(
+  'SIAGANOW_SHELTER_SIMULATION',
+  defaultValue: false,
+);
 const mapTileUrl = String.fromEnvironment(
   'SIAGANOW_TILE_URL',
   defaultValue: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -43,6 +50,551 @@ WidgetStateProperty<double?> _actionButtonElevation(double restingElevation) =>
     });
 
 const _actionButtonShadow = WidgetStatePropertyAll<Color>(Color(0x4D075B49));
+
+/// Shared visual tokens for information surfaces; controls remain solid.
+abstract final class SiagaNowSurfaceTokens {
+  static const info = Color(0xBFFFFFFF); // 75% opaque
+  static const mintInfo = Color(0xBFEAF9EF); // 75% opaque
+  static const warning = Color(0xCCFFF0F0); // 80% opaque for semantic contrast
+  static const error = Color(0xCCFFEEEE);
+  static const notice = Color(0xCCFFF3D7);
+  static const simulationNotice = Color(0xCCFFF2D5);
+  static const border = Color(0x66FFFFFF);
+  static const cardRadius = 12.0;
+  static const panelRadius = 12.0;
+  static const dialogRadius = 16.0;
+}
+
+class SiagaNowHeaderBackground extends StatelessWidget {
+  const SiagaNowHeaderBackground({
+    super.key,
+    this.overlayOpacity = .5,
+    this.waveAlignment = Alignment.topCenter,
+  });
+
+  final double overlayOpacity;
+  final Alignment waveAlignment;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.maxWidth.isFinite
+          ? constraints.maxWidth
+          : MediaQuery.sizeOf(context).width;
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF79B99E), Color(0xFFCDEBDD)],
+              ),
+            ),
+          ),
+          Positioned.fill(
+            key: const ValueKey('siaganow.header.wave'),
+            child: Image.asset(
+              'assets/images/header_waves.png',
+              width: width,
+              fit: BoxFit.fitWidth,
+              alignment: waveAlignment,
+            ),
+          ),
+          Positioned.fill(
+            key: const ValueKey('siaganow.header.green-overlay'),
+            child: IgnorePointer(
+              child: Opacity(
+                opacity: overlayOpacity.clamp(.4, .6),
+                child: ColorFiltered(
+                  colorFilter: const ColorFilter.mode(
+                    Color(0xFF16845F),
+                    BlendMode.srcATop,
+                  ),
+                  child: Image.asset(
+                    'assets/images/header_waves.png',
+                    width: width,
+                    fit: BoxFit.fitWidth,
+                    alignment: waveAlignment,
+                    filterQuality: FilterQuality.medium,
+                    excludeFromSemantics: true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+class SiagaNowPageBackground extends StatelessWidget {
+  const SiagaNowPageBackground({
+    super.key,
+    required this.child,
+    this.showTop = false,
+    this.showLandscape = true,
+    this.landscapeHeight,
+  });
+
+  final Widget child;
+  final bool showTop;
+  final bool showLandscape;
+  final double? landscapeHeight;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final footerHeight = min(
+        landscapeHeight ?? 330.0,
+        constraints.maxHeight * .44,
+      );
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Color(0xFFD3F1E0)),
+          if (showTop)
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 180,
+              child: SiagaNowHeaderBackground(),
+            ),
+          if (showLandscape)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: footerHeight,
+              child: Image.asset(
+                'assets/images/landscape_background.png',
+                fit: BoxFit.cover,
+                alignment: Alignment.bottomCenter,
+              ),
+            ),
+          if (showLandscape)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: footerHeight,
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0xB3D3F1E0), Color(0x22D3F1E0)],
+                    stops: [0, .58],
+                  ),
+                ),
+              ),
+            ),
+          Positioned(
+            top: showTop ? 180 : 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: const _SiagaNowColorOverlay(),
+          ),
+          child,
+        ],
+      );
+    },
+  );
+}
+
+class _SiagaNowColorOverlay extends StatelessWidget {
+  const _SiagaNowColorOverlay();
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: Opacity(
+      opacity: .30,
+      child: Image.asset(
+        'assets/images/global_color_overlay.png',
+        fit: BoxFit.cover,
+        alignment: Alignment.topCenter,
+        filterQuality: FilterQuality.medium,
+        excludeFromSemantics: true,
+      ),
+    ),
+  );
+}
+
+class _AnimatedTabStack extends StatelessWidget {
+  const _AnimatedTabStack({required this.index, required this.children});
+
+  final int index;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 320);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        for (var i = 0; i < children.length; i++)
+          Positioned.fill(
+            key: ValueKey('tab-$i'),
+            child: AnimatedSlide(
+              duration: duration,
+              curve: Curves.easeInOutCubic,
+              offset: i == index ? Offset.zero : const Offset(.018, 0),
+              child: AnimatedOpacity(
+                duration: duration,
+                curve: Curves.easeInOutCubic,
+                opacity: i == index ? 1 : 0,
+                child: IgnorePointer(
+                  ignoring: i != index,
+                  child: ExcludeSemantics(
+                    excluding: i != index,
+                    child: TickerMode(enabled: i == index, child: children[i]),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _GlassNavigationBar extends StatelessWidget {
+  const _GlassNavigationBar({required this.index, required this.onSelected});
+
+  final int index;
+  final ValueChanged<int> onSelected;
+
+  static const _items =
+      <
+        ({
+          String label,
+          String semanticLabel,
+          IconData icon,
+          IconData activeIcon,
+        })
+      >[
+        (
+          label: 'Beranda',
+          semanticLabel: 'Beranda',
+          icon: Icons.home_outlined,
+          activeIcon: Icons.home,
+        ),
+        (
+          label: 'Rute',
+          semanticLabel: 'Rute Evakuasi',
+          icon: Icons.map_outlined,
+          activeIcon: Icons.map,
+        ),
+        (
+          label: 'Laporan',
+          semanticLabel: 'Laporkan Bencana',
+          icon: Icons.add_location_alt_outlined,
+          activeIcon: Icons.add_location_alt,
+        ),
+        (
+          label: 'Donasi',
+          semanticLabel: 'Donasi',
+          icon: Icons.mail_outline_rounded,
+          activeIcon: Icons.mail_rounded,
+        ),
+        (
+          label: 'Darurat',
+          semanticLabel: 'Layanan Darurat',
+          icon: Icons.call_outlined,
+          activeIcon: Icons.call,
+        ),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(26),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 11, sigmaY: 11),
+            child: Container(
+              height: 76,
+              decoration: BoxDecoration(
+                color: const Color(0xC9F7FFF9),
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(color: const Color(0x99FFFFFF), width: 1),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x26075B49),
+                    blurRadius: 18,
+                    offset: Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  for (var i = 0; i < _items.length; i++)
+                    Expanded(
+                      child: _GlassNavigationDestination(
+                        key: ValueKey('nav-destination-$i'),
+                        item: _items[i],
+                        selected: i == index,
+                        reduceMotion: reduceMotion,
+                        onTap: () => onSelected(i),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GlassNavigationDestination extends StatelessWidget {
+  const _GlassNavigationDestination({
+    super.key,
+    required this.item,
+    required this.selected,
+    required this.reduceMotion,
+    required this.onTap,
+  });
+
+  final ({
+    String label,
+    String semanticLabel,
+    IconData icon,
+    IconData activeIcon,
+  })
+  item;
+  final bool selected;
+  final bool reduceMotion;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final duration = reduceMotion
+        ? Duration.zero
+        : const Duration(milliseconds: 300);
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: item.semanticLabel,
+      excludeSemantics: true,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(22),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 6),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                AnimatedContainer(
+                  duration: duration,
+                  curve: Curves.easeInOutCubic,
+                  width: selected ? 50 : 42,
+                  height: 31,
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? const Color(0xFF01543F)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Center(
+                    child: AnimatedSwitcher(
+                      duration: duration,
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: ScaleTransition(scale: animation, child: child),
+                      ),
+                      child: Icon(
+                        selected ? item.activeIcon : item.icon,
+                        key: ValueKey(selected),
+                        size: 23,
+                        color: selected
+                            ? Colors.white
+                            : const Color(0xFF45584E),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                AnimatedDefaultTextStyle(
+                  duration: duration,
+                  curve: Curves.easeInOutCubic,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    height: 1.1,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected
+                        ? const Color(0xFF01543F)
+                        : const Color(0xFF45584E),
+                  ),
+                  child: Text(item.label, maxLines: 1),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SiagaNowPageTransitionsBuilder extends PageTransitionsBuilder {
+  const _SiagaNowPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    if (MediaQuery.disableAnimationsOf(context)) return child;
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeInOutCubic,
+    );
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(.025, 0),
+          end: Offset.zero,
+        ).animate(curved),
+        child: child,
+      ),
+    );
+  }
+}
+
+class _LoadingSkeleton extends StatefulWidget {
+  const _LoadingSkeleton({this.rows = 3});
+  final int rows;
+
+  @override
+  State<_LoadingSkeleton> createState() => _LoadingSkeletonState();
+}
+
+class _LoadingSkeletonState extends State<_LoadingSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _shimmer = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1350),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _shimmer.repeat();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _shimmer.stop();
+    } else if (!_shimmer.isAnimating) {
+      _shimmer.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _shimmer.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _shimmer,
+    builder: (context, _) => ShaderMask(
+      blendMode: BlendMode.srcATop,
+      shaderCallback: (bounds) {
+        if (MediaQuery.disableAnimationsOf(context)) {
+          return const LinearGradient(
+            colors: [Colors.transparent, Colors.transparent],
+          ).createShader(bounds);
+        }
+        final shift = _shimmer.value * 2.4 - 1.2;
+        return LinearGradient(
+          begin: Alignment(shift - .7, 0),
+          end: Alignment(shift + .7, 0),
+          colors: const [
+            Colors.transparent,
+            Color(0x66FFFFFF),
+            Colors.transparent,
+          ],
+          stops: const [0, .5, 1],
+        ).createShader(bounds);
+      },
+      child: Column(
+        children: List.generate(
+          widget.rows,
+          (index) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Container(
+              height: index == 0 ? 88 : 72,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: .78),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0x334C8B70)),
+              ),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    height: 13,
+                    width: index == 0 ? 150 : 112,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD6E9DE),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    height: 10,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE4EFE8),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  if (index == 0) ...[
+                    const SizedBox(height: 7),
+                    Container(
+                      height: 10,
+                      width: 190,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE4EFE8),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 const _defaultMapLatitude = String.fromEnvironment(
   'SIAGANOW_DEFAULT_LATITUDE',
   defaultValue: '-0.9471',
@@ -322,8 +874,23 @@ class ShelterRecord {
     this.verifiedAt,
     this.simulation,
     this.latitude,
-    this.longitude,
-  );
+    this.longitude, {
+    this.id,
+  });
+
+  static const localSimulationFixtures = <ShelterRecord>[
+    ShelterRecord(
+      'Shelter Simulasi SiagaNow',
+      'Area Kuranji, Padang, Sumatera Barat',
+      'Fixture lokal SiagaNow',
+      null,
+      true,
+      -0.9138,
+      100.3974,
+      id: 'siaganow-sim-kuranji-001',
+    ),
+  ];
+  final String? id;
   final String name;
   final String address;
   final String? source;
@@ -341,10 +908,26 @@ class ShelterRecord {
         .toString(),
     json['source']?.toString(),
     json['verified_at']?.toString(),
-    simulation,
+    simulation ||
+        json['simulation'] == true ||
+        json['is_simulated'] == true ||
+        const {
+          'simulation',
+          'simulated',
+        }.contains(json['data_type']?.toString().toLowerCase()),
     _coordinate(json['latitude'] ?? json['lat'], -90, 90),
     _coordinate(json['longitude'] ?? json['lng'] ?? json['lon'], -180, 180),
+    id: json['id']?.toString(),
   );
+
+  double? distanceFrom(LatLng? location) {
+    if (!hasValidCoordinates || location == null) return null;
+    return const Distance().as(
+      LengthUnit.Kilometer,
+      location,
+      LatLng(latitude!, longitude!),
+    );
+  }
 
   static double? _coordinate(Object? value, double min, double max) {
     final parsed = value is num ? value.toDouble() : double.tryParse('$value');
@@ -355,15 +938,154 @@ class ShelterRecord {
 }
 
 class ReportReceipt {
-  const ReportReceipt(this.id, this.status, this.message);
+  const ReportReceipt(
+    this.id,
+    this.status,
+    this.message, {
+    this.shelter,
+    this.aiAnalysis,
+  });
   final Object? id;
   final String status;
   final String message;
-  factory ReportReceipt.fromJson(Map<String, dynamic> json) => ReportReceipt(
-    json['id'],
-    json['status']?.toString() ?? 'submitted',
-    'Laporan #${json['id'] ?? '—'} tersimpan: ${json['status'] ?? 'submitted'}.',
+  final ReportShelterInfo? shelter;
+  final ReportAiAnalysis? aiAnalysis;
+
+  factory ReportReceipt.fromJson(Map<String, dynamic> json) {
+    final id = json['id'];
+    if (id == null || id.toString().trim().isEmpty) {
+      throw const ApiException(
+        'Server belum mengonfirmasi bahwa laporan berhasil disimpan.',
+      );
+    }
+    final status = json['status']?.toString() ?? 'submitted';
+    return ReportReceipt(
+      id,
+      status,
+      'Laporan #${json['id'] ?? '—'} tersimpan: $status.',
+      shelter: ReportShelterInfo.fromResponse(json),
+      aiAnalysis: ReportAiAnalysis.fromJson(json['ai_analysis']),
+    );
+  }
+}
+
+class ReportAiAnalysis {
+  const ReportAiAnalysis({
+    required this.status,
+    this.verificationStatus,
+    this.serviceStatus,
+  });
+  final String status;
+  final String? verificationStatus;
+  final String? serviceStatus;
+
+  factory ReportAiAnalysis.fromJson(Object? value) {
+    final json = value is Map
+        ? Map<String, dynamic>.from(value)
+        : const <String, dynamic>{};
+    final status = switch (json['status']?.toString()) {
+      'processing' => 'processing',
+      'completed' => 'completed',
+      'failed' => 'failed',
+      _ => 'pending',
+    };
+    final verification = switch (json['verification_status']?.toString()) {
+      'verified' => 'verified',
+      'rejected' => 'rejected',
+      _ => 'pending',
+    };
+    return ReportAiAnalysis(
+      status: status,
+      verificationStatus: verification,
+      serviceStatus: json['service_status']?.toString(),
+    );
+  }
+
+  String get label => switch (status) {
+    'processing' => 'Sedang dianalisis',
+    'completed' => 'Analisis selesai',
+    'failed' => 'Analisis belum tersedia',
+    _ =>
+      serviceStatus == 'not_configured'
+          ? 'Model YOLO belum terhubung'
+          : 'Menunggu analisis',
+  };
+
+  String get verificationLabel => switch (verificationStatus) {
+    'verified' => 'Sudah diverifikasi admin',
+    'rejected' => 'Ditandai tidak sesuai oleh admin',
+    _ => 'Menunggu verifikasi admin',
+  };
+}
+
+class _ReportAiStatusCard extends StatelessWidget {
+  const _ReportAiStatusCard({required this.analysis});
+  final ReportAiAnalysis analysis;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: ListTile(
+      leading: const Icon(Icons.auto_awesome_outlined),
+      title: const Text('Analisis AI'),
+      subtitle: Text(
+        '${analysis.label} · ${analysis.verificationLabel}. Hasil AI bukan keputusan resmi; verifikasi admin menentukan tindak lanjut.',
+      ),
+      isThreeLine: true,
+    ),
   );
+}
+
+class ReportShelterInfo {
+  const ReportShelterInfo({
+    required this.name,
+    required this.location,
+    this.simulation = false,
+    this.distanceKm,
+  });
+
+  final String name;
+  final String location;
+  final bool simulation;
+  final double? distanceKm;
+
+  factory ReportShelterInfo.localSimulation(ShelterRecord shelter, double km) =>
+      ReportShelterInfo(
+        name: shelter.name,
+        location: shelter.address,
+        simulation: true,
+        distanceKm: km,
+      );
+
+  static ReportShelterInfo? fromResponse(Map<String, dynamic> response) {
+    final raw = response['shelter'] ?? response['recommended_shelter'];
+    if (raw is! Map) return null;
+    final shelter = Map<String, dynamic>.from(raw);
+    final source = shelter['source']?.toString().toLowerCase() ?? '';
+    final type = shelter['data_type']?.toString().toLowerCase() ?? '';
+    final verifiedAt = shelter['verified_at']?.toString();
+    final isSimulation =
+        shelter['simulation'] == true ||
+        type == 'simulation' ||
+        type == 'simulated' ||
+        source.contains('simulasi');
+    final isVerified =
+        shelter['verified'] == true ||
+        (type == 'actual' && verifiedAt?.isNotEmpty == true);
+    final name = shelter['name']?.toString().trim() ?? '';
+    if (isSimulation || !isVerified || name.isEmpty) return null;
+
+    final location =
+        (shelter['address'] ??
+                shelter['location_label'] ??
+                shelter['location'] ??
+                'Lokasi terverifikasi')
+            .toString()
+            .trim();
+    return ReportShelterInfo(
+      name: name,
+      location: location.isEmpty ? 'Lokasi terverifikasi' : location,
+    );
+  }
 }
 
 class WeatherPeriod {
@@ -405,10 +1127,16 @@ class SharedPreferencesOnboardingStore implements OnboardingProgressStore {
 }
 
 class SiagaNowApp extends StatefulWidget {
-  const SiagaNowApp({super.key, this.onboardingStore, this.tokenReader});
+  const SiagaNowApp({
+    super.key,
+    this.onboardingStore,
+    this.tokenReader,
+    this.apiService,
+  });
 
   final OnboardingProgressStore? onboardingStore;
   final Future<String?> Function()? tokenReader;
+  final ApiService? apiService;
 
   @override
   State<SiagaNowApp> createState() => _SiagaNowAppState();
@@ -420,7 +1148,7 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
       widget.onboardingStore ?? SharedPreferencesOnboardingStore();
   final navigatorKey = GlobalKey<NavigatorState>();
   final messengerKey = GlobalKey<ScaffoldMessengerState>();
-  late final api = ApiService(storage);
+  late final api = widget.apiService ?? ApiService(storage);
   int tab = 0;
   String? userName;
   bool booting = true;
@@ -491,7 +1219,20 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: navigatorContext,
       isScrollControlled: true,
-      builder: (_) => AuthSheet(api: api),
+      backgroundColor: Colors.transparent,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 3, sigmaY: 3),
+          child: ColoredBox(
+            color: const Color(0xF5F7FFF9),
+            child: AuthSheet(api: api),
+          ),
+        ),
+      ),
     );
     if (result != null && mounted) {
       setState(() => userName = result['name']?.toString());
@@ -543,13 +1284,33 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
           backgroundColor: const Color(0xFFCDEBDD),
           foregroundColor: const Color(0xFF15392F),
           elevation: 0,
+          toolbarHeight: 90,
         ),
         cardTheme: CardThemeData(
-          color: Colors.white,
+          color: SiagaNowSurfaceTokens.info,
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: const BorderSide(color: Color(0xFFCFE3D8)),
+            borderRadius: BorderRadius.circular(
+              SiagaNowSurfaceTokens.cardRadius,
+            ),
+            side: const BorderSide(color: SiagaNowSurfaceTokens.border),
+          ),
+        ),
+        dialogTheme: DialogThemeData(
+          backgroundColor: const Color(0xC7F7FFF9),
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(
+              SiagaNowSurfaceTokens.dialogRadius,
+            ),
+            side: const BorderSide(color: SiagaNowSurfaceTokens.border),
+          ),
+        ),
+        bottomSheetTheme: const BottomSheetThemeData(
+          backgroundColor: Color(0xC7F7FFF9),
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
           ),
         ),
         inputDecorationTheme: InputDecorationTheme(
@@ -610,32 +1371,43 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
             shadowColor: _actionButtonShadow,
           ),
         ),
+        pageTransitionsTheme: const PageTransitionsTheme(
+          builders: {
+            TargetPlatform.android: _SiagaNowPageTransitionsBuilder(),
+            TargetPlatform.iOS: _SiagaNowPageTransitionsBuilder(),
+          },
+        ),
       ),
       home: booting
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : onboardingPending
           ? SiagaNowIntro(onFinished: _completeOnboarding)
           : Scaffold(
+              extendBody: true,
               appBar: AppBar(
                 backgroundColor: const Color(0xFFCDEBDD),
-                flexibleSpace: Image.asset(
-                  'assets/images/header_waves.png',
-                  fit: BoxFit.cover,
-                  alignment: Alignment.topCenter,
-                ),
+                toolbarHeight: 92,
+                flexibleSpace: const SiagaNowHeaderBackground(),
                 title: Row(
                   children: [
                     Image.asset(
                       'assets/images/siaganow-nature-emblem.png',
-                      width: 68,
-                      height: 45,
+                      width: 46,
+                      height: 38,
                       fit: BoxFit.contain,
                       semanticLabel: 'Lambang SiagaNow',
                     ),
-                    const SizedBox(width: 10),
-                    const Text(
-                      'SiagaNow',
-                      style: TextStyle(fontWeight: FontWeight.w800),
+                    const SizedBox(width: 6),
+                    const Flexible(
+                      child: Text(
+                        'SiagaNow',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -666,68 +1438,52 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
                   const SizedBox(width: 8),
                 ],
               ),
-              body: IndexedStack(
-                index: tab,
-                children: [
-                  HomePage(
-                    api: api,
-                    onSelectTab: (i) => setState(() => tab = i),
-                    onOpenFamily: () => navigatorKey.currentState!.push(
-                      MaterialPageRoute(
-                        builder: (_) => FamilyPage(
-                          api: api,
-                          loggedIn: userName != null,
-                          onLogin: _requireLogin,
+              body: SiagaNowPageBackground(
+                showTop: false,
+                child: _AnimatedTabStack(
+                  index: tab,
+                  children: [
+                    HomePage(
+                      api: api,
+                      onSelectTab: (i) => setState(() => tab = i),
+                      onOpenNews: () => navigatorKey.currentState!.push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => Scaffold(
+                            appBar: AppBar(
+                              flexibleSpace: const SiagaNowHeaderBackground(),
+                              title: const Text('Halaman Berita'),
+                            ),
+                            body: SiagaNowPageBackground(
+                              child: NewsPage(api: api),
+                            ),
+                          ),
+                        ),
+                      ),
+                      onOpenFamily: () => navigatorKey.currentState!.push(
+                        MaterialPageRoute(
+                          builder: (_) => FamilyPage(
+                            api: api,
+                            loggedIn: userName != null,
+                            onLogin: _requireLogin,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  ShelterPage(api: api),
-                  ReportPage(
-                    api: api,
-                    loggedIn: userName != null,
-                    onLogin: _requireLogin,
-                  ),
-                  NewsPage(api: api),
-                  MorePage(
-                    api: api,
-                    loggedIn: userName != null,
-                    onLogin: _requireLogin,
-                    onLogout: _logout,
-                  ),
-                ],
+                    ShelterPage(api: api),
+                    ReportPage(
+                      api: api,
+                      loggedIn: userName != null,
+                      onLogin: _requireLogin,
+                      onHome: () => setState(() => tab = 0),
+                    ),
+                    const DonationPage(embedded: true),
+                    const EmergencyContactsPage(embedded: true),
+                  ],
+                ),
               ),
-              bottomNavigationBar: NavigationBar(
-                backgroundColor: const Color(0xDDF7FFF9),
-                indicatorColor: const Color(0xFFB7E4D0),
-                selectedIndex: tab,
-                onDestinationSelected: (i) => setState(() => tab = i),
-                destinations: const [
-                  NavigationDestination(
-                    icon: Icon(Icons.home_outlined),
-                    selectedIcon: Icon(Icons.home),
-                    label: 'Beranda',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.map_outlined),
-                    selectedIcon: Icon(Icons.map),
-                    label: 'Peta',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.add_location_alt_outlined),
-                    selectedIcon: Icon(Icons.add_location_alt),
-                    label: 'Laporan',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.article_outlined),
-                    selectedIcon: Icon(Icons.article),
-                    label: 'Berita',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.grid_view_rounded),
-                    label: 'Lainnya',
-                  ),
-                ],
+              bottomNavigationBar: _GlassNavigationBar(
+                index: tab,
+                onSelected: (i) => setState(() => tab = i),
               ),
             ),
     );
@@ -807,22 +1563,28 @@ class _SiagaNowIntroState extends State<SiagaNowIntro> {
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: _mint,
-    body: SafeArea(
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 300),
-        switchInCurve: Curves.easeOut,
-        switchOutCurve: Curves.easeIn,
-        transitionBuilder: (child, animation) => FadeTransition(
-          opacity: animation,
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.98, end: 1).animate(animation),
-            child: child,
+    body: Stack(
+      fit: StackFit.expand,
+      children: [
+        const _SiagaNowColorOverlay(),
+        SafeArea(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.98, end: 1).animate(animation),
+                child: child,
+              ),
+            ),
+            child: _showSplash
+                ? const _IntroSplash(key: ValueKey('intro-splash'))
+                : _buildOnboarding(key: const ValueKey('intro-pages')),
           ),
         ),
-        child: _showSplash
-            ? const _IntroSplash(key: ValueKey('intro-splash'))
-            : _buildOnboarding(key: const ValueKey('intro-pages')),
-      ),
+      ],
     ),
   );
 
@@ -1111,9 +1873,11 @@ class _IntroPage extends StatelessWidget {
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: _surface,
-                    borderRadius: BorderRadius.circular(22),
-                    border: Border.all(color: const Color(0xFFCFE3D8)),
+                    color: SiagaNowSurfaceTokens.mintInfo,
+                    borderRadius: BorderRadius.circular(
+                      SiagaNowSurfaceTokens.panelRadius,
+                    ),
+                    border: Border.all(color: SiagaNowSurfaceTokens.border),
                   ),
                   child: Center(child: _illustration(artHeight - 28)),
                 ),
@@ -1152,11 +1916,13 @@ class HomePage extends StatefulWidget {
     super.key,
     required this.api,
     required this.onSelectTab,
+    required this.onOpenNews,
     required this.onOpenFamily,
     this.locationProvider,
   });
   final ApiService api;
   final ValueChanged<int> onSelectTab;
+  final VoidCallback onOpenNews;
   final VoidCallback onOpenFamily;
   final WarningLocationProvider? locationProvider;
   @override
@@ -1322,10 +2088,19 @@ class _HomePageState extends State<HomePage> {
     final stats = data?['statistics'];
     final isDemo =
         data?['data_type'] == 'simulation' || (data == null && demoMode);
+    if (loading) {
+      return RefreshIndicator(
+        onRefresh: load,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 28),
+          children: const [_LoadingSkeleton(rows: 4)],
+        ),
+      );
+    }
     return RefreshIndicator(
       onRefresh: load,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(18, 6, 18, 28),
+        padding: const EdgeInsets.fromLTRB(18, 6, 18, 112),
         children: [
           const SizedBox(height: 4),
           Text(
@@ -1342,10 +2117,10 @@ class _HomePageState extends State<HomePage> {
             _HomeNewsCard(
               item: Map<String, dynamic>.from(news.first as Map),
               simulation: newsDataType == 'simulation',
-              onTap: () => widget.onSelectTab(3),
+              onTap: widget.onOpenNews,
             )
           else
-            _HomeNewsEmpty(onTap: () => widget.onSelectTab(3)),
+            _HomeNewsEmpty(onTap: widget.onOpenNews),
           const SizedBox(height: 18),
           _WarningStatusCard(
             warning: locationWarning ?? data?['warning'],
@@ -1452,9 +2227,11 @@ class _HomePageState extends State<HomePage> {
                     width: 128,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFCFE3D8)),
+                      color: SiagaNowSurfaceTokens.info,
+                      borderRadius: BorderRadius.circular(
+                        SiagaNowSurfaceTokens.cardRadius,
+                      ),
+                      border: Border.all(color: SiagaNowSurfaceTokens.border),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1567,17 +2344,7 @@ class _HomePageState extends State<HomePage> {
               isThreeLine: true,
             ),
           ),
-          const SizedBox(height: 20),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Image.asset(
-              'assets/images/landscape_background.png',
-              height: 150,
-              width: double.infinity,
-              fit: BoxFit.cover,
-              alignment: Alignment.bottomCenter,
-            ),
-          ),
+          const SizedBox(height: 24),
         ],
       ),
     );
@@ -1619,7 +2386,7 @@ class _HomeNewsCard extends StatelessWidget {
     final imageAsset = _demoNewsImageAsset(item['image_key']);
     return Material(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(9),
+      borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.cardRadius),
       elevation: 2,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -1750,11 +2517,11 @@ class _HomeNewsEmpty extends StatelessWidget {
   final VoidCallback onTap;
   @override
   Widget build(BuildContext context) => Material(
-    color: Colors.white,
-    borderRadius: BorderRadius.circular(9),
+    color: SiagaNowSurfaceTokens.info,
+    borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.cardRadius),
     child: InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(9),
+      borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.cardRadius),
       child: const SizedBox(
         height: 140,
         child: Center(
@@ -1795,19 +2562,20 @@ class _AiFloodDetectionCard extends StatelessWidget {
         ? Map<String, dynamic>.from(observation['camera'] as Map)
         : <String, dynamic>{};
     final confidence = observation['confidence'];
-    final verificationLabel = switch ('${observation['verification_status'] ?? ''}') {
-      'verified' => 'Ditinjau petugas',
-      'rejected' => 'Ditolak petugas',
-      'pending' => 'Belum ditinjau petugas',
-      _ => null,
-    };
+    final verificationLabel =
+        switch ('${observation['verification_status'] ?? ''}') {
+          'verified' => 'Ditinjau petugas',
+          'rejected' => 'Ditolak petugas',
+          'pending' => 'Belum ditinjau petugas',
+          _ => null,
+        };
 
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFEAF5EE),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFB8D9C8)),
+        color: SiagaNowSurfaceTokens.mintInfo,
+        borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.panelRadius),
+        border: Border.all(color: SiagaNowSurfaceTokens.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1847,7 +2615,11 @@ class _AiFloodDetectionCard extends StatelessWidget {
           const SizedBox(height: 6),
           const Text(
             'Hasil model bukan peringatan resmi. Jika data tidak ada atau kedaluwarsa, status tetap Unknown.',
-            style: TextStyle(fontSize: 10, height: 1.3, color: Color(0xFF53665C)),
+            style: TextStyle(
+              fontSize: 10,
+              height: 1.3,
+              color: Color(0xFF53665C),
+            ),
           ),
         ],
       ),
@@ -1896,9 +2668,9 @@ class _WarningStatusCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF0F0),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFF4CECE)),
+        color: SiagaNowSurfaceTokens.warning,
+        borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.panelRadius),
+        border: Border.all(color: const Color(0x66F4CECE)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2030,7 +2802,7 @@ class _HomeWeatherCard extends StatelessWidget {
     final location = weather is Map ? weather['location']?.toString() : null;
     final condition = weather is Map ? weather['condition']?.toString() : null;
     return Material(
-      color: const Color(0xFFEAF9EF),
+      color: SiagaNowSurfaceTokens.mintInfo,
       borderRadius: BorderRadius.circular(10),
       child: InkWell(
         onTap: onTap,
@@ -2108,8 +2880,8 @@ class _HomeStatsCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
+        color: SiagaNowSurfaceTokens.info,
+        borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.cardRadius),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2185,98 +2957,105 @@ class WeatherDetailPage extends StatelessWidget {
         ? Map<String, dynamic>.from(weather as Map)
         : <String, dynamic>{};
     return Scaffold(
-      appBar: AppBar(title: const Text('Cuaca dan peringatan')),
-      body: ListView(
-        padding: const EdgeInsets.all(18),
-        children: [
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEAF9EF),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Image.asset(
-                  'assets/illustrations/weather_sun_cloud.png',
-                  width: 76,
-                  height: 76,
-                  fit: BoxFit.contain,
-                ),
-                Text(
-                  '${values['temperature'] ?? '—'}°',
-                  style: const TextStyle(
-                    fontSize: 42,
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF075B49),
+      appBar: AppBar(
+        flexibleSpace: const SiagaNowHeaderBackground(),
+        title: const Text('Cuaca dan peringatan'),
+      ),
+      body: SiagaNowPageBackground(
+        child: ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: SiagaNowSurfaceTokens.mintInfo,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Image.asset(
+                    'assets/illustrations/weather_sun_cloud.png',
+                    width: 76,
+                    height: 76,
+                    fit: BoxFit.contain,
                   ),
-                ),
-                Text(
-                  '${values['condition'] ?? 'Kondisi belum tersedia'}',
-                  style: const TextStyle(
-                    fontSize: 19,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text('${values['location'] ?? 'Lokasi tidak tersedia'}'),
-                Text(
-                  'Sumber: ${values['source'] ?? 'tidak dicantumkan'}${values['updated_at'] == null ? '' : ' · Diperbarui ${values['updated_at']}'}',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF68756B),
-                  ),
-                ),
-                if (values['message'] != null) ...[
-                  const SizedBox(height: 8),
                   Text(
-                    '${values['message']}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          _WarningStatusCard(warning: warning, loading: false, error: null),
-          const SizedBox(height: 20),
-          const Text(
-            'Prakiraan BMKG',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-          ),
-          if (forecasts.isEmpty)
-            const _EmptyState(
-              text: 'Interval prakiraan belum tersedia dari API.',
-            )
-          else
-            ...forecasts.map(
-              (period) => Card(
-                child: ListTile(
-                  leading: const Icon(
-                    Icons.cloud_outlined,
-                    color: Color(0xFF397A60),
-                  ),
-                  title: Text(period.localDateTime ?? 'Waktu belum tersedia'),
-                  subtitle: Text(
-                    '${period.condition ?? 'Kondisi belum tersedia'}${period.humidity == null ? '' : ' · Kelembapan ${period.humidity}%'}',
-                  ),
-                  trailing: Text(
-                    period.temperature == null ? '—' : '${period.temperature}°',
+                    '${values['temperature'] ?? '—'}°',
                     style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 17,
+                      fontSize: 42,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF075B49),
+                    ),
+                  ),
+                  Text(
+                    '${values['condition'] ?? 'Kondisi belum tersedia'}',
+                    style: const TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text('${values['location'] ?? 'Lokasi tidak tersedia'}'),
+                  Text(
+                    'Sumber: ${values['source'] ?? 'tidak dicantumkan'}${values['updated_at'] == null ? '' : ' · Diperbarui ${values['updated_at']}'}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF68756B),
+                    ),
+                  ),
+                  if (values['message'] != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '${values['message']}',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _WarningStatusCard(warning: warning, loading: false, error: null),
+            const SizedBox(height: 20),
+            const Text(
+              'Prakiraan BMKG',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            ),
+            if (forecasts.isEmpty)
+              const _EmptyState(
+                text: 'Interval prakiraan belum tersedia dari API.',
+              )
+            else
+              ...forecasts.map(
+                (period) => Card(
+                  child: ListTile(
+                    leading: const Icon(
+                      Icons.cloud_outlined,
+                      color: Color(0xFF397A60),
+                    ),
+                    title: Text(period.localDateTime ?? 'Waktu belum tersedia'),
+                    subtitle: Text(
+                      '${period.condition ?? 'Kondisi belum tersedia'}${period.humidity == null ? '' : ' · Kelembapan ${period.humidity}%'}',
+                    ),
+                    trailing: Text(
+                      period.temperature == null
+                          ? '—'
+                          : '${period.temperature}°',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 17,
+                      ),
                     ),
                   ),
                 ),
               ),
+            const SizedBox(height: 10),
+            const Text(
+              'Prakiraan berlaku untuk wilayah administrasi dan bukan pengukuran di alamat rumah.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF68756B)),
             ),
-          const SizedBox(height: 10),
-          const Text(
-            'Prakiraan berlaku untuk wilayah administrasi dan bukan pengukuran di alamat rumah.',
-            style: TextStyle(fontSize: 12, color: Color(0xFF68756B)),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -2343,7 +3122,7 @@ class _ShelterPageState extends State<ShelterPage> {
         query: {if (search.text.trim().isNotEmpty) 'q': search.text.trim()},
       );
       dataType = result['data_type']?.toString();
-      places = (result['data'] is List ? result['data'] as List : [])
+      final apiShelters = (result['data'] is List ? result['data'] as List : [])
           .whereType<Map>()
           .map(
             (p) => ShelterRecord.fromJson(
@@ -2352,6 +3131,24 @@ class _ShelterPageState extends State<ShelterPage> {
             ),
           )
           .toList();
+      // In local single-fixture QA mode, do not display other API-provided
+      // simulations alongside the one explicitly requested local fixture.
+      places = kDebugMode && shelterSimulationEnabled
+          ? apiShelters.where((shelter) => !shelter.simulation).toList()
+          : apiShelters;
+      // Local QA fixtures stay explicitly tagged and can never enter an API request.
+      if (kDebugMode && shelterSimulationEnabled) {
+        final query = search.text.trim().toLowerCase();
+        places.addAll(
+          ShelterRecord.localSimulationFixtures.where(
+            (shelter) =>
+                query.isEmpty ||
+                '${shelter.name} ${shelter.address}'.toLowerCase().contains(
+                  query,
+                ),
+          ),
+        );
+      }
       final matching = realShelters;
       if (matching.length == 1 && mapReady) {
         mapController.move(
@@ -2362,6 +3159,18 @@ class _ShelterPageState extends State<ShelterPage> {
     } catch (_) {
       issue = 'Shelter belum berhasil dimuat. Periksa koneksi lalu coba lagi.';
       places = [];
+      if (kDebugMode && shelterSimulationEnabled) {
+        final query = search.text.trim().toLowerCase();
+        places = ShelterRecord.localSimulationFixtures
+            .where(
+              (shelter) =>
+                  query.isEmpty ||
+                  '${shelter.name} ${shelter.address}'.toLowerCase().contains(
+                    query,
+                  ),
+            )
+            .toList();
+      }
     }
     requestPending = false;
     if (mounted) setState(() => loading = false);
@@ -2371,8 +3180,8 @@ class _ShelterPageState extends State<ShelterPage> {
     height: 300,
     alignment: Alignment.center,
     decoration: BoxDecoration(
-      color: const Color(0xFFE8EEE8),
-      borderRadius: BorderRadius.circular(20),
+      color: const Color(0xBFE8EEE8),
+      borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.cardRadius),
     ),
     padding: const EdgeInsets.all(20),
     child: Text(message, textAlign: TextAlign.center),
@@ -2417,7 +3226,10 @@ class _ShelterPageState extends State<ShelterPage> {
         userLocation = point;
         locationMessage = 'Posisi perangkat dari GPS satu kali.';
       });
-      if (mapReady) mapController.move(point, 15);
+      if (mapReady &&
+          !(initialRequest && kDebugMode && shelterSimulationEnabled)) {
+        mapController.move(point, 15);
+      }
     } on TimeoutException {
       userLocation = null;
       locationMessage = 'GPS tidak merespons dalam 15 detik. Peta tetap dapat digunakan di lokasi peta terakhir atau default Padang.';
@@ -2447,7 +3259,7 @@ class _ShelterPageState extends State<ShelterPage> {
   }
 
   void showShelter(ShelterRecord place) {
-    if (place.simulation || !place.hasValidCoordinates) {
+    if (!place.hasValidCoordinates) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -2458,7 +3270,7 @@ class _ShelterPageState extends State<ShelterPage> {
       return;
     }
     if (mapReady) {
-      mapController.move(LatLng(place.latitude!, place.longitude!), 15);
+      mapController.move(LatLng(place.latitude!, place.longitude!), 14);
     }
     showModalBottomSheet<void>(
       context: context,
@@ -2474,11 +3286,43 @@ class _ShelterPageState extends State<ShelterPage> {
               const SizedBox(height: 8),
               Text(place.address),
               const SizedBox(height: 12),
-              Text(
-                'Sumber: ${place.source ?? 'tidak tercatat'}\nVerifikasi: ${place.verifiedAt ?? 'belum tercatat'}',
-              ),
+              if (place.simulation)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _SimulationNotice(),
+                    const SizedBox(height: 10),
+                    Text('ID pengujian: ${place.id ?? 'tidak tersedia'}'),
+                    Text(
+                      'Koordinat latihan: ${place.latitude!.toStringAsFixed(5)}, ${place.longitude!.toStringAsFixed(5)}',
+                    ),
+                    if (place.distanceFrom(userLocation) case final km?)
+                      Text(
+                        'Jarak garis lurus dari GPS: ${km.toStringAsFixed(1)} km',
+                      )
+                    else
+                      const Text(
+                        'Jarak belum tersedia. Izinkan GPS atau gunakan titik default Padang.',
+                      ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: () => openSimulationDirections(place),
+                      icon: const Icon(Icons.directions_outlined),
+                      label: const Text('Buka arah ke titik simulasi'),
+                    ),
+                    const Text(
+                      'Arah dibuka di aplikasi peta eksternal. Rute dan waktu tempuh tidak dihitung oleh SiagaNow.',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF596B60)),
+                    ),
+                  ],
+                )
+              else
+                Text(
+                  'Sumber: ${place.source ?? 'tidak tercatat'}\nVerifikasi: ${place.verifiedAt ?? 'belum tercatat'}',
+                ),
               const SizedBox(height: 12),
-              const Text('Rute dan kapasitas resmi tidak tersedia.'),
+              if (!place.simulation)
+                const Text('Rute dan kapasitas resmi tidak tersedia.'),
             ],
           ),
         ),
@@ -2486,11 +3330,27 @@ class _ShelterPageState extends State<ShelterPage> {
     );
   }
 
+  Future<void> openSimulationDirections(ShelterRecord shelter) async {
+    if (!shelter.simulation || !shelter.hasValidCoordinates) return;
+    final uri = Uri.https('www.google.com', '/maps/dir/', {
+      'api': '1',
+      'destination': '${shelter.latitude},${shelter.longitude}',
+    });
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Aplikasi atau browser peta tidak tersedia.'),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) => RefreshIndicator(
     onRefresh: load,
     child: ListView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 112),
       children: [
         const Text(
           'Peta evakuasi',
@@ -2501,6 +3361,10 @@ class _ShelterPageState extends State<ShelterPage> {
           'Jelajahi titik informasi dan rencanakan kesiapsiagaan.',
           style: TextStyle(color: Colors.blueGrey.shade600),
         ),
+        if (kDebugMode && shelterSimulationEnabled) ...[
+          const SizedBox(height: 10),
+          const _SimulationNotice(),
+        ],
         const SizedBox(height: 16),
         FutureBuilder<FileCacheStore>(
           future: _tileStore,
@@ -2530,6 +3394,24 @@ class _ShelterPageState extends State<ShelterPage> {
                     ),
                   ),
                 ),
+              if (kDebugMode && shelterSimulationEnabled)
+                for (final shelter in places.where(
+                  (place) => place.simulation && place.hasValidCoordinates,
+                ))
+                  Marker(
+                    point: LatLng(shelter.latitude!, shelter.longitude!),
+                    width: 52,
+                    height: 54,
+                    child: IconButton(
+                      tooltip: '${shelter.name} · simulasi',
+                      onPressed: () => showShelter(shelter),
+                      icon: const Icon(
+                        Icons.location_on,
+                        size: 44,
+                        color: Color(0xFFE69B22),
+                      ),
+                    ),
+                  ),
               if (userLocation != null)
                 Marker(
                   point: userLocation!,
@@ -2543,7 +3425,9 @@ class _ShelterPageState extends State<ShelterPage> {
                 ),
             ];
             return ClipRRect(
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(
+                SiagaNowSurfaceTokens.cardRadius,
+              ),
               child: SizedBox(
                 height: 300,
                 child: Stack(
@@ -2552,7 +3436,9 @@ class _ShelterPageState extends State<ShelterPage> {
                       mapController: mapController,
                       options: MapOptions(
                         initialCenter: _initialCenter,
-                        initialZoom: 12,
+                        initialZoom: kDebugMode && shelterSimulationEnabled
+                            ? 10
+                            : 12,
                         onMapReady: () {
                           if (!mounted) return;
                           setState(() => mapReady = true);
@@ -2731,31 +3617,35 @@ class _ShelterPageState extends State<ShelterPage> {
             ),
           ],
         ),
+        if (issue != null) _InlineError(issue!),
         if (loading)
-          const Center(
-            child: Padding(
-              padding: EdgeInsets.all(28),
-              child: CircularProgressIndicator(),
-            ),
-          )
+          const _LoadingSkeleton(rows: 3)
         else if (places.isEmpty)
           _EmptyState(text: issue ?? 'Belum ada tempat yang tercatat.')
         else
           ...places.map((p) {
             final simulated = p.simulation;
+            final distanceFromGps = p.distanceFrom(userLocation);
             return Card(
               margin: const EdgeInsets.only(bottom: 10),
               child: ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Color(0xFFE7F1EA),
-                  child: Icon(Icons.place_outlined, color: Color(0xFF145B45)),
+                leading: CircleAvatar(
+                  backgroundColor: simulated
+                      ? const Color(0xFFFFF2D5)
+                      : const Color(0xFFE7F1EA),
+                  child: Icon(
+                    Icons.place_outlined,
+                    color: simulated
+                        ? const Color(0xFFB8740B)
+                        : const Color(0xFF145B45),
+                  ),
                 ),
                 title: Text(
                   p.name,
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 subtitle: Text(
-                  '${p.address}\n${simulated ? 'Simulasi · bukan shelter terverifikasi' : '${p.source ?? 'Sumber tidak tercatat'} · ${p.verifiedAt == null ? 'Belum diverifikasi' : 'Diverifikasi ${p.verifiedAt}'}'}',
+                  '${p.address}${distanceFromGps == null ? '' : '\n${distanceFromGps.toStringAsFixed(1)} km dari GPS'}\n${simulated ? 'SIMULASI — BUKAN SHELTER RESMI' : '${p.source ?? 'Sumber tidak tercatat'} · ${p.verifiedAt == null ? 'Belum diverifikasi' : 'Diverifikasi ${p.verifiedAt}'}'}',
                 ),
                 isThreeLine: true,
                 trailing: Icon(
@@ -2778,10 +3668,12 @@ class ReportPage extends StatefulWidget {
     required this.api,
     required this.loggedIn,
     required this.onLogin,
+    this.onHome,
   });
   final ApiService api;
   final bool loggedIn;
   final Future<void> Function() onLogin;
+  final VoidCallback? onHome;
   @override
   State<ReportPage> createState() => _ReportPageState();
 }
@@ -2889,6 +3781,7 @@ class _ReportPageState extends State<ReportPage> {
   }
 
   Future<void> submit() async {
+    if (sending) return;
     if (!form.currentState!.validate()) return;
     if (!widget.loggedIn) {
       widget.onLogin();
@@ -2911,18 +3804,74 @@ class _ReportPageState extends State<ReportPage> {
         if (injured.text.isNotEmpty) 'injured': injured.text,
         if (deceased.text.isNotEmpty) 'deceased': deceased.text,
       }, evidence);
-      final receipt = ReportReceipt.fromJson(
-        Map<String, dynamic>.from(result['data'] as Map),
-      );
+      final rawReport = result['data'];
+      if (rawReport is! Map) {
+        throw const ApiException(
+          'Server belum mengonfirmasi bahwa laporan berhasil disimpan.',
+        );
+      }
+      final reportData = Map<String, dynamic>.from(rawReport);
+      if (!reportData.containsKey('shelter')) {
+        final outerShelter = result['shelter'] ?? result['recommended_shelter'];
+        if (outerShelter != null) reportData['shelter'] = outerShelter;
+      }
+      final receipt = ReportReceipt.fromJson(reportData);
+      var recommendedShelter = receipt.shelter;
+      if (recommendedShelter == null &&
+          kDebugMode &&
+          shelterSimulationEnabled) {
+        final reportPoint = LatLng(
+          double.parse(lat.text),
+          double.parse(lng.text),
+        );
+        final closest =
+            ShelterRecord.localSimulationFixtures
+                .where((shelter) => shelter.hasValidCoordinates)
+                .map(
+                  (shelter) => (
+                    shelter: shelter,
+                    km: const Distance().as(
+                      LengthUnit.Kilometer,
+                      reportPoint,
+                      LatLng(shelter.latitude!, shelter.longitude!),
+                    ),
+                  ),
+                )
+                .toList()
+              ..sort((a, b) => a.km.compareTo(b.km));
+        if (closest.isNotEmpty) {
+          recommendedShelter = ReportShelterInfo.localSimulation(
+            closest.first.shelter,
+            closest.first.km,
+          );
+        }
+      }
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(receipt.message)));
+        // The form is cleared only after the API returned a valid saved report.
         title.clear();
         description.clear();
-        evidence.clear();
+        lat.clear();
+        lng.clear();
         injured.clear();
         deceased.clear();
-        await loadReports();
+        evidence.clear();
+        setState(() => sending = false);
+        unawaited(loadReports());
+        unawaited(
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => ReportSuccessPage(
+                shelter: recommendedShelter,
+                aiAnalysis: receipt.aiAnalysis,
+                onReturnHome: () {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                  widget.onHome?.call();
+                },
+              ),
+            ),
+          ),
+        );
+        return;
       }
     } catch (e) {
       if (e is ApiException && (e.statusCode == 401 || e.statusCode == 403)) {
@@ -2937,7 +3886,7 @@ class _ReportPageState extends State<ReportPage> {
 
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.all(20),
+    padding: const EdgeInsets.fromLTRB(20, 20, 20, 112),
     children: [
       const Text(
         'Laporkan bencana',
@@ -3147,7 +4096,7 @@ class _ReportPageState extends State<ReportPage> {
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
-                  onPressed: pickEvidence,
+                  onPressed: sending ? null : pickEvidence,
                   icon: const Icon(Icons.attach_file),
                   label: Text(
                     evidence.isEmpty
@@ -3201,7 +4150,7 @@ class _ReportPageState extends State<ReportPage> {
           text: 'Masuk untuk melihat riwayat laporan akun Anda.',
         )
       else if (historyLoading)
-        const Center(child: CircularProgressIndicator())
+        const _LoadingSkeleton(rows: 2)
       else if (reports.isEmpty)
         const _EmptyState(text: 'Belum ada laporan tersimpan pada akun ini.')
       else
@@ -3268,6 +4217,286 @@ class _ReportPageState extends State<ReportPage> {
   );
 }
 
+class ReportSuccessPage extends StatelessWidget {
+  const ReportSuccessPage({
+    super.key,
+    required this.onReturnHome,
+    this.shelter,
+    this.aiAnalysis,
+  });
+
+  final VoidCallback onReturnHome;
+  final ReportShelterInfo? shelter;
+  final ReportAiAnalysis? aiAnalysis;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: const Color(0xFFD4F0E0),
+    body: LayoutBuilder(
+      builder: (context, constraints) {
+        final footerHeight = min(330.0, constraints.maxHeight * .42);
+        final safeBottom = constraints.maxHeight * .18;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            const ColoredBox(color: Color(0xFFD4F0E0)),
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 280,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0xFF01543F), Color(0xFFD4F0E0)],
+                  ),
+                ),
+              ),
+            ),
+            const Positioned(
+              key: ValueKey('report-status.fixed-header'),
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 112,
+              child: SiagaNowHeaderBackground(),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: footerHeight,
+              child: Image.asset(
+                'assets/images/landscape_background.png',
+                fit: BoxFit.cover,
+                alignment: Alignment.bottomCenter,
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: footerHeight,
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0xB3D4F0E0), Color(0x33D4F0E0)],
+                    stops: [0, .55],
+                  ),
+                ),
+              ),
+            ),
+            const _SiagaNowColorOverlay(),
+            SafeArea(
+              child: Stack(
+                children: [
+                  Column(
+                    children: [
+                      SizedBox(
+                        height: 48,
+                        child: Row(
+                          children: [
+                            IconButton(
+                              tooltip: 'Kembali',
+                              onPressed: () => Navigator.of(context).maybePop(),
+                              icon: const Icon(Icons.arrow_back),
+                              color: const Color(0xFF102D25),
+                            ),
+                            const SizedBox(width: 2),
+                            const Text(
+                              'Status Laporan',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF102D25),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          padding: EdgeInsets.fromLTRB(
+                            24,
+                            min(82.0, constraints.maxHeight * .1),
+                            24,
+                            140,
+                          ),
+                          child: Column(
+                            children: [
+                              MediaQuery.disableAnimationsOf(context)
+                                  ? SvgPicture.asset(
+                                      'assets/figma/report/status_success.svg',
+                                      width: 95,
+                                      height: 95,
+                                      semanticsLabel:
+                                          'Laporan berhasil disimpan',
+                                    )
+                                  : TweenAnimationBuilder<double>(
+                                      tween: Tween(begin: .65, end: 1),
+                                      duration: const Duration(
+                                        milliseconds: 360,
+                                      ),
+                                      curve: Curves.easeOutBack,
+                                      builder: (context, scale, child) =>
+                                          Transform.scale(
+                                            scale: scale,
+                                            child: child,
+                                          ),
+                                      child: SvgPicture.asset(
+                                        'assets/figma/report/status_success.svg',
+                                        width: 95,
+                                        height: 95,
+                                        semanticsLabel:
+                                            'Laporan berhasil disimpan',
+                                      ),
+                                    ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Laporan Tersimpan',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.black,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              ConstrainedBox(
+                                constraints: BoxConstraints(maxWidth: 280),
+                                child: Text(
+                                  'Laporan berhasil dikirim dan sedang diproses oleh tim terkait.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    height: 1.5,
+                                    color: Color(0xFF171717),
+                                  ),
+                                ),
+                              ),
+                              if (shelter != null) ...[
+                                const SizedBox(height: 22),
+                                _ReportShelterCard(shelter: shelter!),
+                              ],
+                              if (aiAnalysis != null) ...[
+                                const SizedBox(height: 16),
+                                _ReportAiStatusCard(analysis: aiAnalysis!),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Positioned(
+                    left: 26,
+                    right: 26,
+                    bottom: max(20.0, safeBottom * .68),
+                    child: SizedBox(
+                      height: 60,
+                      child: FilledButton(
+                        onPressed: onReturnHome,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF01543F),
+                          foregroundColor: Colors.white,
+                          elevation: 4,
+                          shadowColor: const Color(0x66000000),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            'Kembali Ke Beranda',
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+class _ReportShelterCard extends StatelessWidget {
+  const _ReportShelterCard({required this.shelter});
+
+  final ReportShelterInfo shelter;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    constraints: const BoxConstraints(minHeight: 85),
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+    decoration: BoxDecoration(
+      color: SiagaNowSurfaceTokens.info,
+      borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.cardRadius),
+    ),
+    child: Row(
+      children: [
+        SvgPicture.asset(
+          'assets/figma/report/shelter_pin.svg',
+          width: 40,
+          height: 57.3525,
+          semanticsLabel: 'Lokasi shelter',
+        ),
+        const SizedBox(width: 18),
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (shelter.simulation) ...[
+                const Text(
+                  'SHELTER SIMULASI',
+                  style: TextStyle(
+                    color: Color(0xFF9A650D),
+                    fontWeight: FontWeight.w800,
+                    fontSize: 10,
+                    letterSpacing: .5,
+                  ),
+                ),
+                const SizedBox(height: 3),
+              ],
+              Text(
+                shelter.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF01543F),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${shelter.location}${shelter.distanceKm == null ? '' : '\nPerkiraan jarak ${shelter.distanceKm!.toStringAsFixed(1)} km · simulasi'}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Color(0xFF01543F), fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class MorePage extends StatelessWidget {
   const MorePage({
     super.key,
@@ -3282,7 +4511,7 @@ class MorePage extends StatelessWidget {
   final Future<void> Function() onLogout;
   @override
   Widget build(BuildContext context) => ListView(
-    padding: const EdgeInsets.all(20),
+    padding: const EdgeInsets.fromLTRB(20, 20, 20, 112),
     children: [
       const Text(
         'Layanan SiagaNow',
@@ -3358,19 +4587,22 @@ class MorePage extends StatelessWidget {
 }
 
 class DonationPage extends StatelessWidget {
-  const DonationPage({super.key});
+  const DonationPage({super.key, this.embedded = false});
+
+  final bool embedded;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Donasi')),
-    body: ListView(
-      padding: const EdgeInsets.all(20),
+  Widget build(BuildContext context) {
+    final content = ListView(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 112),
       children: [
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: const Color(0xFFE7F6ED),
-            borderRadius: BorderRadius.circular(18),
+            color: SiagaNowSurfaceTokens.mintInfo,
+            borderRadius: BorderRadius.circular(
+              SiagaNowSurfaceTokens.panelRadius,
+            ),
           ),
           child: const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3414,8 +4646,16 @@ class DonationPage extends StatelessWidget {
           ),
         ),
       ],
-    ),
-  );
+    );
+    if (embedded) return content;
+    return Scaffold(
+      appBar: AppBar(
+        flexibleSpace: const SiagaNowHeaderBackground(),
+        title: const Text('Donasi'),
+      ),
+      body: SiagaNowPageBackground(child: content),
+    );
+  }
 }
 
 class _FamilyNameDialog extends StatefulWidget {
@@ -4064,6 +5304,7 @@ class _FamilyPageState extends State<FamilyPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
+      flexibleSpace: const SiagaNowHeaderBackground(),
       title: const Text('Keluarga Siaga'),
       actions: [
         if (authenticated)
@@ -4073,289 +5314,300 @@ class _FamilyPageState extends State<FamilyPage> {
           ),
       ],
     ),
-    body: !authenticated
-        ? _FeatureLoginPrompt(
-            onLogin: signIn,
-            text: 'Masuk untuk membuat dan mengelola keluarga Anda.',
-          )
-        : loading
-        ? const Center(child: CircularProgressIndicator())
-        : error != null && family == null
-        ? _FeatureError(text: error!, retry: load)
-        : ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              const Text(
-                'Keluarga dan kontak darurat',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Data hanya dapat dilihat dan dikelola pemilik grup. Fitur ini tidak membagikan lokasi langsung atau mengirim peringatan.',
-              ),
-              const SizedBox(height: 16),
-              if (error != null) _InlineError(error!),
-              if (family == null) ...[
-                const _FeatureEmpty(
-                  icon: Icons.family_restroom,
-                  title: 'Belum ada grup keluarga',
-                  message: 'Buat grup untuk menyimpan daftar anggota dan kontak darurat.',
-                ),
-                const SizedBox(height: 14),
-                FilledButton.icon(
-                  onPressed: saving ? null : createFamily,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Buat grup keluarga'),
+    body: SiagaNowPageBackground(
+      child: !authenticated
+          ? _FeatureLoginPrompt(
+              onLogin: signIn,
+              text: 'Masuk untuk membuat dan mengelola keluarga Anda.',
+            )
+          : loading
+          ? const Padding(
+              padding: EdgeInsets.all(20),
+              child: _LoadingSkeleton(rows: 3),
+            )
+          : error != null && family == null
+          ? _FeatureError(text: error!, retry: load)
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                const Text(
+                  'Keluarga dan kontak darurat',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: saving ? null : joinFamily,
-                  icon: const Icon(Icons.group_add_outlined),
-                  label: const Text('Gabung dengan kode undangan'),
+                const Text(
+                  'Data hanya dapat dilihat dan dikelola pemilik grup. Fitur ini tidak membagikan lokasi langsung atau mengirim peringatan.',
                 ),
-              ] else ...[
-                Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF087354),
-                    borderRadius: BorderRadius.circular(18),
+                const SizedBox(height: 16),
+                if (error != null) _InlineError(error!),
+                if (family == null) ...[
+                  const _FeatureEmpty(
+                    icon: Icons.family_restroom,
+                    title: 'Belum ada grup keluarga',
+                    message: 'Buat grup untuk menyimpan daftar anggota dan kontak darurat.',
                   ),
-                  child: Row(
-                    children: [
-                      const CircleAvatar(
-                        backgroundColor: Color(0xFFD0F1DF),
-                        child: Icon(
-                          Icons.family_restroom,
-                          color: Color(0xFF075B49),
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    onPressed: saving ? null : createFamily,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Buat grup keluarga'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: saving ? null : joinFamily,
+                    icon: const Icon(Icons.group_add_outlined),
+                    label: const Text('Gabung dengan kode undangan'),
+                  ),
+                ] else ...[
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF087354),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Row(
+                      children: [
+                        const CircleAvatar(
+                          backgroundColor: Color(0xFFD0F1DF),
+                          child: Icon(
+                            Icons.family_restroom,
+                            color: Color(0xFF075B49),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Text(
-                          '${family!['name'] ?? 'Keluarga'}',
-                          style: const TextStyle(
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Text(
+                            '${family!['name'] ?? 'Keluarga'}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 19,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        PopupMenuButton<String>(
+                          tooltip: 'Kelola grup keluarga',
+                          enabled: !saving,
+                          icon: const Icon(
+                            Icons.more_vert,
                             color: Colors.white,
-                            fontSize: 19,
-                            fontWeight: FontWeight.w700,
                           ),
+                          onSelected: (action) async {
+                            if (action == 'rename') {
+                              final name = await _textDialog(
+                                title: 'Ubah nama keluarga',
+                                label: 'Nama keluarga',
+                                initial: '${family!['name'] ?? ''}',
+                              );
+                              if (name != null) {
+                                await _mutate(() async {
+                                  await widget.api.put(
+                                    'family-groups/${family!['id']}',
+                                    {'name': name},
+                                  );
+                                  await load();
+                                });
+                              }
+                            } else {
+                              await removeFamily();
+                            }
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: 'rename',
+                              child: Text('Ubah nama'),
+                            ),
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: Text('Hapus grup'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Anggota',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                      PopupMenuButton<String>(
-                        tooltip: 'Kelola grup keluarga',
-                        enabled: !saving,
-                        icon: const Icon(Icons.more_vert, color: Colors.white),
-                        onSelected: (action) async {
-                          if (action == 'rename') {
-                            final name = await _textDialog(
-                              title: 'Ubah nama keluarga',
-                              label: 'Nama keluarga',
-                              initial: '${family!['name'] ?? ''}',
-                            );
-                            if (name != null) {
-                              await _mutate(() async {
-                                await widget.api.put(
-                                  'family-groups/${family!['id']}',
-                                  {'name': name},
-                                );
-                                await load();
-                              });
-                            }
-                          } else {
-                            await removeFamily();
-                          }
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(
-                            value: 'rename',
-                            child: Text('Ubah nama'),
-                          ),
-                          PopupMenuItem(
-                            value: 'delete',
-                            child: Text('Hapus grup'),
-                          ),
-                        ],
+                      TextButton.icon(
+                        onPressed: saving ? null : () => saveMember(),
+                        icon: const Icon(Icons.person_add_alt_1),
+                        label: const Text('Tambah'),
                       ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Anggota',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: saving ? null : () => saveMember(),
-                      icon: const Icon(Icons.person_add_alt_1),
-                      label: const Text('Tambah'),
-                    ),
-                  ],
-                ),
-                ...((family!['members'] is List)
-                        ? (family!['members'] as List)
-                        : const [])
-                    .whereType<Map>()
-                    .map((raw) {
-                      final member = Map<String, dynamic>.from(raw);
-                      final phone = member['emergency_phone']?.toString();
-                      final notes = member['notes']?.toString();
-                      final details = <String>[
-                        if (member['relation']?.toString().isNotEmpty == true)
-                          '${member['relation']}',
-                        if (phone?.isNotEmpty == true) 'Kontak darurat: $phone',
-                        if (notes?.isNotEmpty == true) 'Catatan: $notes',
-                        checkInSummary(member),
-                        reminderSummary(member),
-                      ];
-                      return Card(
-                        child: ListTile(
-                          leading: const CircleAvatar(
-                            backgroundColor: Color(0xFFE7F6ED),
-                            child: Icon(
-                              Icons.person_outline,
-                              color: Color(0xFF075B49),
-                            ),
-                          ),
-                          title: Text('${member['name'] ?? 'Anggota'}'),
-                          subtitle: Text(details.join('\n')),
-                          trailing: PopupMenuButton<String>(
-                            enabled: !saving,
-                            onSelected: (action) {
-                              if (action == 'edit') {
-                                saveMember(member: member);
-                              } else if (action == 'invite') {
-                                _mutate(() => createMemberInvitation(member));
-                              } else if (action == 'reminder') {
-                                configureReminder(member);
-                              } else {
-                                removeMember(member);
-                              }
-                            },
-                            itemBuilder: (_) => [
-                              const PopupMenuItem(
-                                value: 'edit',
-                                child: Text('Ubah'),
+                  ...((family!['members'] is List)
+                          ? (family!['members'] as List)
+                          : const [])
+                      .whereType<Map>()
+                      .map((raw) {
+                        final member = Map<String, dynamic>.from(raw);
+                        final phone = member['emergency_phone']?.toString();
+                        final notes = member['notes']?.toString();
+                        final details = <String>[
+                          if (member['relation']?.toString().isNotEmpty == true)
+                            '${member['relation']}',
+                          if (phone?.isNotEmpty == true)
+                            'Kontak darurat: $phone',
+                          if (notes?.isNotEmpty == true) 'Catatan: $notes',
+                          checkInSummary(member),
+                          reminderSummary(member),
+                        ];
+                        return Card(
+                          child: ListTile(
+                            leading: const CircleAvatar(
+                              backgroundColor: Color(0xFFE7F6ED),
+                              child: Icon(
+                                Icons.person_outline,
+                                color: Color(0xFF075B49),
                               ),
-                              if (member['user_id'] == null)
+                            ),
+                            title: Text('${member['name'] ?? 'Anggota'}'),
+                            subtitle: Text(details.join('\n')),
+                            trailing: PopupMenuButton<String>(
+                              enabled: !saving,
+                              onSelected: (action) {
+                                if (action == 'edit') {
+                                  saveMember(member: member);
+                                } else if (action == 'invite') {
+                                  _mutate(() => createMemberInvitation(member));
+                                } else if (action == 'reminder') {
+                                  configureReminder(member);
+                                } else {
+                                  removeMember(member);
+                                }
+                              },
+                              itemBuilder: (_) => [
                                 const PopupMenuItem(
-                                  value: 'invite',
-                                  child: Text('Undang akun'),
+                                  value: 'edit',
+                                  child: Text('Ubah'),
                                 ),
-                              const PopupMenuItem(
-                                value: 'reminder',
-                                child: Text('Pengingat'),
-                              ),
-                              const PopupMenuItem(
-                                value: 'remove',
-                                child: Text('Hapus'),
-                              ),
-                            ],
+                                if (member['user_id'] == null)
+                                  const PopupMenuItem(
+                                    value: 'invite',
+                                    child: Text('Undang akun'),
+                                  ),
+                                const PopupMenuItem(
+                                  value: 'reminder',
+                                  child: Text('Pengingat'),
+                                ),
+                                const PopupMenuItem(
+                                  value: 'remove',
+                                  child: Text('Hapus'),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      );
-                    }),
-                if ((family!['members'] as List? ?? []).isEmpty)
-                  const _FeatureEmpty(
-                    icon: Icons.people_outline,
-                    title: 'Belum ada anggota',
-                    message: 'Tambahkan anggota dan kontak darurat yang Anda miliki izin untuk simpan.',
+                        );
+                      }),
+                  if ((family!['members'] as List? ?? []).isEmpty)
+                    const _FeatureEmpty(
+                      icon: Icons.people_outline,
+                      title: 'Belum ada anggota',
+                      message: 'Tambahkan anggota dan kontak darurat yang Anda miliki izin untuk simpan.',
+                    ),
+                ],
+                if (memberships.isNotEmpty) ...[
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Keluarga yang saya ikuti',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
                   ),
-              ],
-              if (memberships.isNotEmpty) ...[
-                const SizedBox(height: 24),
-                const Text(
-                  'Keluarga yang saya ikuti',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 8),
-                for (final membership in memberships)
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '${(membership['group'] as Map?)?['name'] ?? 'Keluarga'}',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 17,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(checkInSummary(membership)),
-                          const SizedBox(height: 6),
-                          Text(reminderSummary(membership)),
-                          const SizedBox(height: 8),
-                          const Text(
-                            'Konfirmasi mencatat jawaban pada waktu tersebut; ini bukan bukti kondisi Anda saat ini.',
-                            style: TextStyle(fontSize: 12),
-                          ),
-                          const SizedBox(height: 8),
-                          for (final raw
-                              in (membership['members'] is List
-                                      ? membership['members'] as List
-                                      : const <Object>[])
-                                  .whereType<Map>())
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 5),
-                              child: Text(
-                                '${raw['name']}: ${checkInSummary(Map<String, dynamic>.from(raw))}',
+                  const SizedBox(height: 8),
+                  for (final membership in memberships)
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${(membership['group'] as Map?)?['name'] ?? 'Keluarga'}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 17,
                               ),
                             ),
-                          Wrap(
-                            spacing: 8,
-                            children: [
-                              FilledButton.icon(
-                                onPressed:
-                                    saving ||
-                                        pendingCheckIns.contains(
-                                          int.tryParse('${membership['id']}'),
-                                        )
-                                    ? null
-                                    : () => checkIn(
-                                        int.parse('${membership['id']}'),
-                                      ),
-                                icon:
-                                    pendingCheckIns.contains(
-                                      int.tryParse('${membership['id']}'),
-                                    )
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(
-                                        Icons.health_and_safety_outlined,
-                                      ),
-                                label: const Text('Saya Aman'),
-                              ),
-                              OutlinedButton.icon(
-                                onPressed: saving
-                                    ? null
-                                    : () => configureReminder(membership),
-                                icon: const Icon(
-                                  Icons.notifications_active_outlined,
+                            const SizedBox(height: 8),
+                            Text(checkInSummary(membership)),
+                            const SizedBox(height: 6),
+                            Text(reminderSummary(membership)),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'Konfirmasi mencatat jawaban pada waktu tersebut; ini bukan bukti kondisi Anda saat ini.',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            const SizedBox(height: 8),
+                            for (final raw
+                                in (membership['members'] is List
+                                        ? membership['members'] as List
+                                        : const <Object>[])
+                                    .whereType<Map>())
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 5,
                                 ),
-                                label: const Text('Pengingat'),
+                                child: Text(
+                                  '${raw['name']}: ${checkInSummary(Map<String, dynamic>.from(raw))}',
+                                ),
                               ),
-                            ],
-                          ),
-                        ],
+                            Wrap(
+                              spacing: 8,
+                              children: [
+                                FilledButton.icon(
+                                  onPressed:
+                                      saving ||
+                                          pendingCheckIns.contains(
+                                            int.tryParse('${membership['id']}'),
+                                          )
+                                      ? null
+                                      : () => checkIn(
+                                          int.parse('${membership['id']}'),
+                                        ),
+                                  icon:
+                                      pendingCheckIns.contains(
+                                        int.tryParse('${membership['id']}'),
+                                      )
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Icon(
+                                          Icons.health_and_safety_outlined,
+                                        ),
+                                  label: const Text('Saya Aman'),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: saving
+                                      ? null
+                                      : () => configureReminder(membership),
+                                  icon: const Icon(
+                                    Icons.notifications_active_outlined,
+                                  ),
+                                  label: const Text('Pengingat'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
+                ],
+                if (saving) const LinearProgressIndicator(),
               ],
-              if (saving) const LinearProgressIndicator(),
-            ],
-          ),
+            ),
+    ),
   );
 }
 
@@ -4505,6 +5757,7 @@ class _RiskAssessmentPageState extends State<RiskAssessmentPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
+      flexibleSpace: const SiagaNowHeaderBackground(),
       title: const Text('Penilaian Risiko'),
       actions: [
         if (authenticated)
@@ -4514,276 +5767,288 @@ class _RiskAssessmentPageState extends State<RiskAssessmentPage> {
           ),
       ],
     ),
-    body: !authenticated
-        ? _FeatureLoginPrompt(
-            onLogin: signIn,
-            text: 'Masuk untuk menyimpan dan melihat pemeriksaan risiko Anda.',
-          )
-        : loading
-        ? const Center(child: CircularProgressIndicator())
-        : ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              const Text(
-                'Pemeriksaan berbasis lokasi',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 8),
-              const _InfoBanner(
-                text: 'Permintaan ini disimpan sebagai pending. SiagaNow belum memiliki skor risiko terverifikasi, peta bahaya, atau klasifikasi aman/tidak aman.',
-              ),
-              const SizedBox(height: 16),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Form(
-                    key: form,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Lokasi',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
+    body: SiagaNowPageBackground(
+      child: !authenticated
+          ? _FeatureLoginPrompt(
+              onLogin: signIn,
+              text:
+                  'Masuk untuk menyimpan dan melihat pemeriksaan risiko Anda.',
+            )
+          : loading
+          ? const Padding(
+              padding: EdgeInsets.all(20),
+              child: _LoadingSkeleton(rows: 3),
+            )
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                const Text(
+                  'Pemeriksaan berbasis lokasi',
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                const _InfoBanner(
+                  text: 'Permintaan ini disimpan sebagai pending. SiagaNow belum memiliki skor risiko terverifikasi, peta bahaya, atau klasifikasi aman/tidak aman.',
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Form(
+                      key: form,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Lokasi',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextFormField(
-                                controller: latitude,
-                                keyboardType:
-                                    const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                      signed: true,
-                                    ),
-                                decoration: const InputDecoration(
-                                  labelText: 'Latitude',
-                                ),
-                                validator: (v) => _coordinateValue(v, -90, 90),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: TextFormField(
-                                controller: longitude,
-                                keyboardType:
-                                    const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                      signed: true,
-                                    ),
-                                decoration: const InputDecoration(
-                                  labelText: 'Longitude',
-                                ),
-                                validator: (v) =>
-                                    _coordinateValue(v, -180, 180),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton(
-                            onPressed: gettingLocation ? null : useLocation,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                if (gettingLocation)
-                                  const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                else
-                                  const Icon(Icons.my_location),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: Text(
-                                    'Gunakan lokasi perangkat',
-                                    textAlign: TextAlign.center,
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextFormField(
+                                  controller: latitude,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                        signed: true,
+                                      ),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Latitude',
                                   ),
+                                  validator: (v) =>
+                                      _coordinateValue(v, -90, 90),
                                 ),
-                              ],
-                            ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: TextFormField(
+                                  controller: longitude,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                        signed: true,
+                                      ),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Longitude',
+                                  ),
+                                  validator: (v) =>
+                                      _coordinateValue(v, -180, 180),
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                        const Divider(height: 28),
-                        const Text(
-                          'Informasi yang Anda ketahui (opsional)',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 8),
-                        TextFormField(
-                          controller: distance,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          decoration: const InputDecoration(
-                            labelText:
-                                'Jarak ke sungai (meter, jika diketahui)',
-                          ),
-                          validator: _optionalNumber,
-                        ),
-                        const SizedBox(height: 10),
-                        TextFormField(
-                          controller: elevation,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                            signed: true,
-                          ),
-                          decoration: const InputDecoration(
-                            labelText: 'Ketinggian (meter, jika diketahui)',
-                          ),
-                          validator: _optionalNumber,
-                        ),
-                        const SizedBox(height: 10),
-                        DropdownButtonFormField<bool?>(
-                          initialValue: floodHistory,
-                          isExpanded: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Riwayat banjir',
-                          ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: null,
-                              child: Text('Belum diketahui'),
-                            ),
-                            DropdownMenuItem(value: true, child: Text('Ya')),
-                            DropdownMenuItem(
-                              value: false,
-                              child: Text('Tidak'),
-                            ),
-                          ],
-                          onChanged: (v) => setState(() => floodHistory = v),
-                        ),
-                        const SizedBox(height: 10),
-                        DropdownButtonFormField<bool?>(
-                          initialValue: landslideHistory,
-                          isExpanded: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Riwayat longsor',
-                          ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: null,
-                              child: Text('Belum diketahui'),
-                            ),
-                            DropdownMenuItem(value: true, child: Text('Ya')),
-                            DropdownMenuItem(
-                              value: false,
-                              child: Text('Tidak'),
-                            ),
-                          ],
-                          onChanged: (v) =>
-                              setState(() => landslideHistory = v),
-                        ),
-                        const SizedBox(height: 10),
-                        DropdownButtonFormField<String>(
-                          initialValue: rainfall,
-                          isExpanded: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Kategori curah hujan',
-                          ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: 'unknown',
-                              child: Text('Belum diketahui'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'low',
-                              child: Text('Rendah'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'moderate',
-                              child: Text('Sedang'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'high',
-                              child: Text('Tinggi'),
-                            ),
-                          ],
-                          onChanged: (v) =>
-                              setState(() => rainfall = v ?? 'unknown'),
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: submitting ? null : submit,
-                            icon: submitting
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton(
+                              onPressed: gettingLocation ? null : useLocation,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  if (gettingLocation)
+                                    const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  else
+                                    const Icon(Icons.my_location),
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text(
+                                      'Gunakan lokasi perangkat',
+                                      textAlign: TextAlign.center,
                                     ),
-                                  )
-                                : const Icon(Icons.fact_check_outlined),
-                            label: Text(
-                              submitting ? 'Menyimpan…' : 'Simpan pemeriksaan',
+                                  ),
+                                ],
+                              ),
                             ),
+                          ),
+                          const Divider(height: 28),
+                          const Text(
+                            'Informasi yang Anda ketahui (opsional)',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 8),
+                          TextFormField(
+                            controller: distance,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText:
+                                  'Jarak ke sungai (meter, jika diketahui)',
+                            ),
+                            validator: _optionalNumber,
+                          ),
+                          const SizedBox(height: 10),
+                          TextFormField(
+                            controller: elevation,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                              signed: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'Ketinggian (meter, jika diketahui)',
+                            ),
+                            validator: _optionalNumber,
+                          ),
+                          const SizedBox(height: 10),
+                          DropdownButtonFormField<bool?>(
+                            initialValue: floodHistory,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Riwayat banjir',
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                value: null,
+                                child: Text('Belum diketahui'),
+                              ),
+                              DropdownMenuItem(value: true, child: Text('Ya')),
+                              DropdownMenuItem(
+                                value: false,
+                                child: Text('Tidak'),
+                              ),
+                            ],
+                            onChanged: (v) => setState(() => floodHistory = v),
+                          ),
+                          const SizedBox(height: 10),
+                          DropdownButtonFormField<bool?>(
+                            initialValue: landslideHistory,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Riwayat longsor',
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                value: null,
+                                child: Text('Belum diketahui'),
+                              ),
+                              DropdownMenuItem(value: true, child: Text('Ya')),
+                              DropdownMenuItem(
+                                value: false,
+                                child: Text('Tidak'),
+                              ),
+                            ],
+                            onChanged: (v) =>
+                                setState(() => landslideHistory = v),
+                          ),
+                          const SizedBox(height: 10),
+                          DropdownButtonFormField<String>(
+                            initialValue: rainfall,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Kategori curah hujan',
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'unknown',
+                                child: Text('Belum diketahui'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'low',
+                                child: Text('Rendah'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'moderate',
+                                child: Text('Sedang'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'high',
+                                child: Text('Tinggi'),
+                              ),
+                            ],
+                            onChanged: (v) =>
+                                setState(() => rainfall = v ?? 'unknown'),
+                          ),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: submitting ? null : submit,
+                              icon: submitting
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.fact_check_outlined),
+                              label: Text(
+                                submitting
+                                    ? 'Menyimpan…'
+                                    : 'Simpan pemeriksaan',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 12),
+                  _InlineError(error!),
+                ],
+                const SizedBox(height: 20),
+                const Text(
+                  'Riwayat pemeriksaan',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                ),
+                if (assessments.isEmpty)
+                  const _FeatureEmpty(
+                    icon: Icons.history,
+                    title: 'Belum ada pemeriksaan',
+                    message:
+                        'Pemeriksaan yang Anda simpan akan muncul di sini.',
+                  ),
+                ...assessments.whereType<Map>().map((raw) {
+                  final item = Map<String, dynamic>.from(raw);
+                  final limits = item['limitations'] is List
+                      ? (item['limitations'] as List)
+                            .map((e) => '$e')
+                            .join('\n')
+                      : 'Data pembanding terverifikasi belum lengkap.';
+                  return Card(
+                    child: ExpansionTile(
+                      title: Text('Status: ${item['status'] ?? 'pending'}'),
+                      subtitle: Text(
+                        'Lokasi ${item['latitude'] ?? '—'}, ${item['longitude'] ?? '—'} · ${item['created_at'] ?? ''}',
+                      ),
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Hasil'),
+                              Text(
+                                item['result'] == null
+                                    ? 'Tidak ada skor atau klasifikasi yang dihitung.'
+                                    : '${item['result']}',
+                              ),
+                              const SizedBox(height: 8),
+                              const Text('Batasan data'),
+                              Text(limits),
+                            ],
                           ),
                         ),
                       ],
                     ),
-                  ),
-                ),
-              ),
-              if (error != null) ...[
-                const SizedBox(height: 12),
-                _InlineError(error!),
+                  );
+                }),
               ],
-              const SizedBox(height: 20),
-              const Text(
-                'Riwayat pemeriksaan',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-              ),
-              if (assessments.isEmpty)
-                const _FeatureEmpty(
-                  icon: Icons.history,
-                  title: 'Belum ada pemeriksaan',
-                  message: 'Pemeriksaan yang Anda simpan akan muncul di sini.',
-                ),
-              ...assessments.whereType<Map>().map((raw) {
-                final item = Map<String, dynamic>.from(raw);
-                final limits = item['limitations'] is List
-                    ? (item['limitations'] as List).map((e) => '$e').join('\n')
-                    : 'Data pembanding terverifikasi belum lengkap.';
-                return Card(
-                  child: ExpansionTile(
-                    title: Text('Status: ${item['status'] ?? 'pending'}'),
-                    subtitle: Text(
-                      'Lokasi ${item['latitude'] ?? '—'}, ${item['longitude'] ?? '—'} · ${item['created_at'] ?? ''}',
-                    ),
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('Hasil'),
-                            Text(
-                              item['result'] == null
-                                  ? 'Tidak ada skor atau klasifikasi yang dihitung.'
-                                  : '${item['result']}',
-                            ),
-                            const SizedBox(height: 8),
-                            const Text('Batasan data'),
-                            Text(limits),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }),
-            ],
-          ),
+            ),
+    ),
   );
 
   String? _coordinateValue(String? value, double min, double max) {
@@ -4838,8 +6103,9 @@ class _FeatureEmpty extends StatelessWidget {
     margin: const EdgeInsets.symmetric(vertical: 10),
     padding: const EdgeInsets.all(22),
     decoration: BoxDecoration(
-      color: const Color(0xFFEAF6EF),
-      borderRadius: BorderRadius.circular(16),
+      color: SiagaNowSurfaceTokens.mintInfo,
+      borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.panelRadius),
+      border: Border.all(color: SiagaNowSurfaceTokens.border),
     ),
     child: Column(
       children: [
@@ -4884,8 +6150,9 @@ class _InlineError extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(
-      color: const Color(0xFFFFEEEE),
-      borderRadius: BorderRadius.circular(12),
+      color: SiagaNowSurfaceTokens.error,
+      borderRadius: BorderRadius.circular(SiagaNowSurfaceTokens.panelRadius),
+      border: Border.all(color: const Color(0x668E3333)),
     ),
     child: Text(text, style: const TextStyle(color: Color(0xFF8E3333))),
   );
@@ -4898,7 +6165,7 @@ class _InfoBanner extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
-      color: const Color(0xFFFFF3D7),
+      color: SiagaNowSurfaceTokens.notice,
       borderRadius: BorderRadius.circular(14),
     ),
     child: Row(
@@ -4914,8 +6181,37 @@ class _InfoBanner extends StatelessWidget {
   );
 }
 
+class _SimulationNotice extends StatelessWidget {
+  const _SimulationNotice();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      color: SiagaNowSurfaceTokens.simulationNotice,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: const Color(0xFFECCB82)),
+    ),
+    padding: const EdgeInsets.all(12),
+    child: const Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.science_outlined, color: Color(0xFF9A650D)),
+        SizedBox(width: 9),
+        Expanded(
+          child: Text(
+            'SIMULASI — BUKAN SHELTER RESMI. Satu titik latihan untuk menguji marker, jarak GPS, dan arah eksternal. Tidak ada kapasitas atau status operasional yang diklaim.',
+            style: TextStyle(color: Color(0xFF765B1C), height: 1.35),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class EmergencyContactsPage extends StatelessWidget {
-  const EmergencyContactsPage({super.key});
+  const EmergencyContactsPage({super.key, this.embedded = false});
+
+  final bool embedded;
   Future<void> _call(BuildContext context) async {
     final opened = await launchUrl(Uri(scheme: 'tel', path: '112'));
     if (!opened && context.mounted) {
@@ -4928,9 +6224,8 @@ class EmergencyContactsPage extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Kontak darurat')),
-    body: ListView(
+  Widget build(BuildContext context) {
+    final content = ListView(
       padding: const EdgeInsets.all(18),
       children: [
         const Text(
@@ -4963,6 +6258,66 @@ class EmergencyContactsPage extends StatelessWidget {
           text: 'Kontak pribadi/keluarga belum tersimpan. Pengelolaan kontak keluarga belum tersedia pada aplikasi ini.',
         ),
       ],
+    );
+    if (embedded) return content;
+    return Scaffold(
+      appBar: AppBar(
+        flexibleSpace: const SiagaNowHeaderBackground(),
+        title: const Text('Daftar Kontak'),
+      ),
+      body: SiagaNowPageBackground(child: content),
+    );
+  }
+}
+
+class _ProfileMenuButton extends StatelessWidget {
+  const _ProfileMenuButton({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 9),
+    child: Material(
+      color: const Color(0xFF01543F),
+      borderRadius: BorderRadius.circular(12),
+      elevation: 2,
+      shadowColor: const Color(0x44000000),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 46),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+            child: Row(
+              children: [
+                Icon(icon, size: 19, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: Colors.white, size: 25),
+              ],
+            ),
+          ),
+        ),
+      ),
     ),
   );
 }
@@ -4973,25 +6328,41 @@ class ProfilePage extends StatefulWidget {
     required this.api,
     required this.onLogin,
     required this.onLogout,
+    this.photoService,
   });
   final ApiService api;
   final VoidCallback onLogin;
   final Future<void> Function() onLogout;
+  final ProfilePhotoService? photoService;
   @override
   State<ProfilePage> createState() => _ProfilePageState();
 }
 
 class _ProfilePageState extends State<ProfilePage> {
+  late final ProfilePhotoService _photoService =
+      widget.photoService ?? ProfilePhotoService();
   UserProfile? profile;
+  File? profilePhoto;
   bool loading = true;
   String? error;
   @override
   void initState() {
     super.initState();
     load();
+    _loadProfilePhoto();
+  }
+
+  Future<void> _loadProfilePhoto() async {
+    try {
+      final photo = await _photoService.loadSavedPhoto();
+      if (mounted) setState(() => profilePhoto = photo);
+    } catch (_) {
+      // A missing or inaccessible local photo should not block profile data.
+    }
   }
 
   Future<void> load() async {
+    if (!mounted) return;
     setState(() {
       loading = true;
       error = null;
@@ -5012,180 +6383,537 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
+    backgroundColor: const Color(0xFFCDEBDD),
     appBar: AppBar(
-      title: const Text('Profil'),
-      actions: [IconButton(onPressed: load, icon: const Icon(Icons.refresh))],
+      key: const ValueKey('profile.standard-appbar'),
+      backgroundColor: const Color(0xFFCDEBDD),
+      toolbarHeight: 92,
+      flexibleSpace: const SiagaNowHeaderBackground(),
+      leading: IconButton(
+        tooltip: 'Kembali',
+        onPressed: () => Navigator.of(context).maybePop(),
+        icon: const Icon(Icons.arrow_back),
+        color: Colors.white,
+      ),
+      actions: [
+        IconButton(
+          tooltip: 'Muat ulang profil',
+          onPressed: loading ? null : load,
+          icon: const Icon(Icons.refresh),
+          color: Colors.white,
+        ),
+        const SizedBox(width: 8),
+      ],
     ),
-    body: loading
-        ? const Center(child: CircularProgressIndicator())
-        : error != null
-        ? _EmptyState(text: error!)
-        : ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  vertical: 24,
-                  horizontal: 18,
-                ),
+    body: DecoratedBox(
+      key: const ValueKey('profile.scroll-background'),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFF24785D),
+            Color(0xFF479979),
+            Color(0xFF9BD0B4),
+            Color(0xFFCDEBDD),
+          ],
+          stops: [0, .18, .48, .78],
+        ),
+      ),
+      child: loading
+          ? const Padding(
+              padding: EdgeInsets.fromLTRB(20, 12, 20, 20),
+              child: _LoadingSkeleton(rows: 3),
+            )
+          : error != null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: _InlineError(error!),
+              ),
+            )
+          : _buildProfileContent(context),
+    ),
+  );
+
+  Widget _buildProfileContent(BuildContext context) => ListView(
+    key: const ValueKey('profile.scroll-content'),
+    padding: const EdgeInsets.fromLTRB(26, 16, 26, 24),
+    children: [
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Semantics(
+            button: true,
+            label: profilePhoto == null
+                ? 'Pilih foto profil'
+                : 'Ganti foto profil',
+            child: InkWell(
+              key: const ValueKey('profile.avatar'),
+              customBorder: const CircleBorder(),
+              onTap: _pickProfilePhoto,
+              child: Container(
+                width: 96,
+                height: 96,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF087354), Color(0xFF55A982)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Row(
-                  children: [
-                    const CircleAvatar(
-                      radius: 30,
-                      backgroundColor: Color(0xFFD0F1DF),
-                      child: Icon(
-                        Icons.person,
-                        size: 34,
-                        color: Color(0xFF075B49),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            profile?.name ?? '',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 19,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          Text(
-                            profile?.email ?? 'Email tidak tersedia',
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Edit profil',
-                      onPressed: () => _showUnavailable(
-                        context,
-                        'Edit profil',
-                        'Perubahan profil belum tersedia melalui API mobile.',
-                      ),
-                      icon: const Icon(
-                        Icons.edit_outlined,
-                        color: Colors.white,
-                      ),
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFD9F3E5),
+                  border: Border.all(color: Colors.white, width: 3),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x33000000),
+                      blurRadius: 8,
+                      offset: Offset(0, 4),
                     ),
                   ],
+                  image: profilePhoto == null
+                      ? null
+                      : DecorationImage(
+                          image: FileImage(profilePhoto!),
+                          fit: BoxFit.cover,
+                        ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Card(
-                child: Column(
+                child: Stack(
+                  alignment: Alignment.center,
                   children: [
-                    if (profile?.phone?.isNotEmpty == true)
-                      ListTile(
-                        leading: const Icon(Icons.phone_outlined),
-                        title: Text(profile!.phone!),
+                    if (profilePhoto == null)
+                      const Icon(
+                        Icons.person_outline_rounded,
+                        color: Color(0xFF01543F),
+                        size: 54,
                       ),
-                    if (profile?.address?.isNotEmpty == true)
-                      ListTile(
-                        leading: const Icon(Icons.location_on_outlined),
-                        title: Text(profile!.address!),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ReportHistoryPage(
-                      api: widget.api,
-                      onLogin: widget.onLogin,
-                    ),
-                  ),
-                ),
-                icon: const Icon(Icons.assignment_outlined),
-                label: const Text('Laporan saya'),
-              ),
-              const SizedBox(height: 12),
-              Card(
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: const Icon(Icons.volunteer_activism_outlined),
-                      title: const Text('Informasi donasi'),
-                      subtitle: const Text('Tidak ada transaksi tersimpan.'),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const DonationPage()),
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.emergency_outlined),
-                      title: const Text('Kontak darurat'),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const EmergencyContactsPage(),
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF01543F),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1.5),
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.all(5),
+                          child: Icon(
+                            Icons.camera_alt_outlined,
+                            color: Colors.white,
+                            size: 15,
+                          ),
                         ),
                       ),
                     ),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.notifications_outlined),
-                      title: const Text('Notifikasi'),
-                      subtitle: const Text(
-                        'Pengaturan notifikasi belum tersedia.',
-                      ),
-                      onTap: () => _showUnavailable(
-                        context,
-                        'Notifikasi',
-                        'Aplikasi belum terhubung dengan layanan notifikasi.',
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.privacy_tip_outlined),
-                      title: const Text('Privasi dan keamanan'),
-                      onTap: () => _showUnavailable(
-                        context,
-                        'Privasi dan keamanan',
-                        'Data akun dan laporan dikirim ke API SiagaNow. Data keluarga hanya dapat diakses pemilik grup.',
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.info_outline),
-                      title: const Text('Tentang SiagaNow'),
-                      onTap: () => _showUnavailable(
-                        context,
-                        'Tentang SiagaNow',
-                        'SiagaNow menghubungkan informasi kesiapsiagaan dengan layanan API yang tersedia. Informasi simulasi bukan peringatan resmi.',
-                      ),
-                    ),
                   ],
                 ),
               ),
-              const SizedBox(height: 10),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  await widget.onLogout();
-                  if (context.mounted) Navigator.of(context).pop();
-                },
-                icon: const Icon(Icons.logout),
-                label: const Text('Keluar'),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  profile?.name.isNotEmpty == true
+                      ? profile!.name
+                      : 'Nama belum tersedia',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    shadows: [Shadow(color: Color(0x55000000), blurRadius: 4)],
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  profile?.email?.isNotEmpty == true
+                      ? profile!.email!
+                      : 'Email belum tersedia',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFF3FFF8),
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 38,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF01543F),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      minimumSize: const Size(0, 38),
+                    ),
+                    onPressed: _showProfilePhotoOptions,
+                    icon: const Icon(Icons.edit_outlined, size: 16),
+                    label: const Text('Edit', style: TextStyle(fontSize: 12)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 16),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xDFFFFFFF),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0x55FFFFFF)),
+        ),
+        child: Column(
+          children: [
+            _ProfileInfoLine(
+              icon: Icons.phone_outlined,
+              label: 'Nomor telepon',
+              value: profile?.phone?.isNotEmpty == true
+                  ? profile!.phone!
+                  : 'Belum tersedia',
+            ),
+            const Divider(height: 1),
+            _ProfileInfoLine(
+              icon: Icons.location_on_outlined,
+              label: 'Alamat',
+              value: profile?.address?.isNotEmpty == true
+                  ? profile!.address!
+                  : 'Belum tersedia',
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 20),
+      const _ProfileSectionLabel('Aktivitas'),
+      const SizedBox(height: 8),
+      _ProfileMenuButton(
+        icon: Icons.volunteer_activism_outlined,
+        title: 'Informasi Donasi',
+        onTap: () =>
+            Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const DonationPage())),
+      ),
+      _ProfileMenuButton(
+        icon: Icons.assignment_outlined,
+        title: 'Laporan Bencana Saya',
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) =>
+                ReportHistoryPage(api: widget.api, onLogin: widget.onLogin),
+          ),
+        ),
+      ),
+      _ProfileMenuButton(
+        icon: Icons.emergency_outlined,
+        title: 'Kontak Darurat',
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const EmergencyContactsPage()),
+        ),
+      ),
+      _ProfileMenuButton(
+        icon: Icons.grid_view_rounded,
+        title: 'Layanan dan fitur lainnya',
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => MorePage(
+              api: widget.api,
+              loggedIn: profile != null,
+              onLogin: () async => widget.onLogin(),
+              onLogout: widget.onLogout,
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(height: 7),
+      const _ProfileSectionLabel('Pengaturan'),
+      const SizedBox(height: 8),
+      _ProfileMenuButton(
+        icon: Icons.notifications_none_outlined,
+        title: 'Notifikasi',
+        onTap: () => _showUnavailable(
+          context,
+          'Notifikasi',
+          'Pengaturan notifikasi untuk akun belum tersedia di aplikasi ini.',
+        ),
+      ),
+      _ProfileMenuButton(
+        icon: Icons.palette_outlined,
+        title: 'Gaya & Tampilan',
+        onTap: () => _showUnavailable(
+          context,
+          'Gaya & Tampilan',
+          'Pengaturan tampilan belum tersedia.',
+        ),
+      ),
+      _ProfileMenuButton(
+        icon: Icons.privacy_tip_outlined,
+        title: 'Privasi dan Keamanan',
+        onTap: () => _showUnavailable(
+          context,
+          'Privasi dan Keamanan',
+          'Data akun dan laporan dikirim ke API SiagaNow. Data keluarga hanya dapat diakses pemilik grup.',
+        ),
+      ),
+      _ProfileMenuButton(
+        icon: Icons.help_outline,
+        title: 'Pusat Bantuan',
+        onTap: () => _showUnavailable(
+          context,
+          'Pusat Bantuan',
+          'Informasi bantuan belum tersedia di aplikasi ini.',
+        ),
+      ),
+      _ProfileMenuButton(
+        icon: Icons.info_outline,
+        title: 'Tentang SiagaNow',
+        onTap: () => _showUnavailable(
+          context,
+          'Tentang SiagaNow',
+          'SiagaNow menghubungkan informasi kesiapsiagaan dengan layanan API yang tersedia. Informasi simulasi bukan peringatan resmi.',
+        ),
+      ),
+      const SizedBox(height: 14),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFE94437),
+            foregroundColor: Colors.white,
+            minimumSize: const Size(96, 48),
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+          ),
+          onPressed: () async {
+            final shouldLogout = await showDialog<bool>(
+              context: context,
+              builder: (dialogContext) => AlertDialog(
+                title: const Text('Keluar dari akun?'),
+                content: const Text('Anda dapat masuk kembali kapan saja.'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext, false),
+                    child: const Text('Batal'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(dialogContext, true),
+                    child: const Text('Keluar'),
+                  ),
+                ],
+              ),
+            );
+            if (shouldLogout != true || !context.mounted) return;
+            await widget.onLogout();
+            if (context.mounted) Navigator.of(context).pop();
+          },
+          icon: const Icon(Icons.logout, size: 18),
+          label: const Text(
+            'Keluar',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+      ),
+    ],
+  );
+
+  Future<void> _showProfilePhotoOptions() async {
+    final action = await showDialog<_ProfilePhotoAction>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFFFCFFFD),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Edit profil',
+          style: TextStyle(color: Color(0xFF15392F)),
+        ),
+        content: Text(
+          'Nama, email, nomor telepon, dan alamat ditampilkan dari akun server. Anda dapat mengelola foto profil di perangkat ini.',
+          style: TextStyle(color: Color(0xFF44685A)),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () =>
+                Navigator.pop(dialogContext, _ProfilePhotoAction.replace),
+            icon: const Icon(Icons.photo_library_outlined),
+            label: const Text('Ganti Foto Profil'),
+          ),
+          TextButton.icon(
+            onPressed: profilePhoto == null
+                ? null
+                : () =>
+                      Navigator.pop(dialogContext, _ProfilePhotoAction.remove),
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('Hapus Foto Profil'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, _ProfilePhotoAction.close),
+            child: const Text('Tutup'),
+          ),
+        ],
+      ),
+    );
+    switch (action) {
+      case _ProfilePhotoAction.replace:
+        await _pickProfilePhoto();
+      case _ProfilePhotoAction.remove:
+        await _removeProfilePhoto();
+      case _ProfilePhotoAction.close:
+      case null:
+        break;
+    }
+  }
+
+  Future<void> _pickProfilePhoto() async {
+    try {
+      final picked = await _photoService.pickFromGallery();
+      if (picked == null || !mounted) return;
+      final file = File(picked.path);
+      await _photoService.validatePhoto(file);
+      if (!mounted) return;
+      final shouldSave = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: const Color(0xFFFCFFFD),
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          title: const Text(
+            'Pratinjau foto profil',
+            style: TextStyle(color: Color(0xFF15392F)),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipOval(
+                child: Image.file(
+                  file,
+                  width: 184,
+                  height: 184,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => const SizedBox(
+                    width: 184,
+                    height: 184,
+                    child: Icon(Icons.broken_image_outlined, size: 48),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Foto akan disimpan di perangkat ini. Maksimal 10 MB.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Color(0xFF44685A), fontSize: 13),
               ),
             ],
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Batal'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Simpan Foto'),
+            ),
+          ],
+        ),
+      );
+      if (shouldSave != true || !mounted) return;
+      final saved = await _photoService.savePhoto(file);
+      if (!mounted) return;
+      setState(() => profilePhoto = saved);
+      _showProfilePhotoMessage('Foto profil tersimpan di perangkat ini.');
+    } on ProfilePhotoException catch (e) {
+      if (mounted) _showProfilePhotoMessage(e.message);
+    } catch (_) {
+      if (mounted) {
+        _showProfilePhotoMessage('Foto tidak dapat dipilih atau disimpan.');
+      }
+    }
+  }
+
+  Future<void> _removeProfilePhoto() async {
+    try {
+      await _photoService.deletePhoto();
+      if (!mounted) return;
+      setState(() => profilePhoto = null);
+      _showProfilePhotoMessage('Foto profil dihapus dari perangkat ini.');
+    } catch (_) {
+      if (mounted) {
+        _showProfilePhotoMessage('Foto profil tidak dapat dihapus.');
+      }
+    }
+  }
+
+  void _showProfilePhotoMessage(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+enum _ProfilePhotoAction { replace, remove, close }
+
+class _ProfileSectionLabel extends StatelessWidget {
+  const _ProfileSectionLabel(this.title);
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    title,
+    style: const TextStyle(
+      color: Color(0xFF01543F),
+      fontSize: 13,
+      fontWeight: FontWeight.w700,
+    ),
+  );
+}
+
+class _ProfileInfoLine extends StatelessWidget {
+  const _ProfileInfoLine({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: Row(
+      children: [
+        Icon(icon, size: 18, color: const Color(0xFF01543F)),
+        const SizedBox(width: 10),
+        SizedBox(
+          width: 112,
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF44685A),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF15392F),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    ),
   );
 }
 
@@ -5227,7 +6955,7 @@ class _NewsPageState extends State<NewsPage> {
   Widget build(BuildContext context) => RefreshIndicator(
     onRefresh: load,
     child: ListView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 112),
       children: [
         const Text(
           'Berita kebencanaan',
@@ -5236,10 +6964,7 @@ class _NewsPageState extends State<NewsPage> {
         if (type == 'simulation')
           const Padding(padding: EdgeInsets.only(top: 12), child: DemoBadge()),
         if (loading)
-          const Padding(
-            padding: EdgeInsets.all(28),
-            child: Center(child: CircularProgressIndicator()),
-          )
+          const _LoadingSkeleton(rows: 3)
         else if (articles.isEmpty)
           _EmptyState(
             text: error ?? 'Belum tersedia berita kejadian terverifikasi.',
@@ -5311,90 +7036,95 @@ class NewsDetailPage extends StatelessWidget {
     final imageUrl = image is String && image.startsWith('http') ? image : null;
     final imageAsset = _demoNewsImageAsset(article['image_key']);
     return Scaffold(
-      appBar: AppBar(title: const Text('Detail berita')),
-      body: ListView(
-        padding: const EdgeInsets.all(18),
-        children: [
-          if (imageAsset != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Image.asset(imageAsset, height: 210, fit: BoxFit.cover),
-            ),
-          if (imageAsset == null && imageUrl != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Image.network(
-                imageUrl,
-                height: 210,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => const SizedBox(
-                  height: 90,
-                  child: Icon(Icons.image_not_supported_outlined),
+      appBar: AppBar(
+        flexibleSpace: const SiagaNowHeaderBackground(),
+        title: const Text('Detail berita'),
+      ),
+      body: SiagaNowPageBackground(
+        child: ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            if (imageAsset != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.asset(imageAsset, height: 210, fit: BoxFit.cover),
+              ),
+            if (imageAsset == null && imageUrl != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.network(
+                  imageUrl,
+                  height: 210,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => const SizedBox(
+                    height: 90,
+                    child: Icon(Icons.image_not_supported_outlined),
+                  ),
                 ),
               ),
-            ),
-          if (imageAsset == null && imageUrl == null && simulation)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Image.asset(
-                'assets/images/news_flooded_home.jpg',
-                height: 210,
-                fit: BoxFit.cover,
+            if (imageAsset == null && imageUrl == null && simulation)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.asset(
+                  'assets/images/news_flooded_home.jpg',
+                  height: 210,
+                  fit: BoxFit.cover,
+                ),
               ),
-            ),
-          if (simulation)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 12),
-              child: DemoBadge(),
-            ),
-          Text(
-            '${article['title'] ?? 'Informasi kebencanaan'}',
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            '${article['source'] ?? 'Sumber tidak dicantumkan'} · ${article['published_at'] ?? 'tanggal tidak tersedia'}',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF68756B)),
-          ),
-          const SizedBox(height: 18),
-          Text(
-            '${article['summary'] ?? article['description'] ?? 'Ringkasan belum tersedia.'}',
-            style: const TextStyle(fontSize: 16, height: 1.5),
-          ),
-          if (article['image_caption'] != null) ...[
-            const SizedBox(height: 8),
+            if (simulation)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: DemoBadge(),
+              ),
             Text(
-              '${article['image_caption']}',
-              style: const TextStyle(fontSize: 12, height: 1.4),
+              '${article['title'] ?? 'Informasi kebencanaan'}',
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
             ),
-          ],
-          if (article['image_credit'] != null) ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: 10),
             Text(
-              'Foto: ${article['image_credit']}',
+              '${article['source'] ?? 'Sumber tidak dicantumkan'} · ${article['published_at'] ?? 'tanggal tidak tersedia'}',
               style: const TextStyle(fontSize: 12, color: Color(0xFF68756B)),
             ),
-          ],
-          if (article['location'] != null) ...[
-            const SizedBox(height: 14),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.place_outlined),
-              title: Text('${article['location']}'),
+            const SizedBox(height: 18),
+            Text(
+              '${article['summary'] ?? article['description'] ?? 'Ringkasan belum tersedia.'}',
+              style: const TextStyle(fontSize: 16, height: 1.5),
             ),
-          ],
-          if (simulation)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text(
-                'Konten simulasi. Jangan gunakan sebagai peringatan atau laporan kejadian resmi.',
-                style: TextStyle(
-                  color: Color(0xFF765B1C),
-                  fontWeight: FontWeight.w600,
+            if (article['image_caption'] != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                '${article['image_caption']}',
+                style: const TextStyle(fontSize: 12, height: 1.4),
+              ),
+            ],
+            if (article['image_credit'] != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Foto: ${article['image_credit']}',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF68756B)),
+              ),
+            ],
+            if (article['location'] != null) ...[
+              const SizedBox(height: 14),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.place_outlined),
+                title: Text('${article['location']}'),
+              ),
+            ],
+            if (simulation)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  'Konten simulasi. Jangan gunakan sebagai peringatan atau laporan kejadian resmi.',
+                  style: TextStyle(
+                    color: Color(0xFF765B1C),
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -5415,82 +7145,95 @@ class ReportDetailPage extends StatelessWidget {
     final injured = report['injured'];
     final deceased = report['deceased'];
     return Scaffold(
-      appBar: AppBar(title: const Text('Detail laporan')),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          Text(
-            '${report['title'] ?? 'Laporan bencana'}',
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.fact_check_outlined),
-                  title: const Text('Status'),
-                  subtitle: Text('${report['status'] ?? 'Belum tersedia'}'),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.category_outlined),
-                  title: const Text('Jenis kejadian'),
-                  subtitle: Text('${report['event_type'] ?? 'Belum tersedia'}'),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.schedule_outlined),
-                  title: const Text('Waktu kejadian'),
-                  subtitle: Text(
-                    '${report['occurred_at'] ?? report['created_at'] ?? 'Belum tersedia'}',
-                  ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.place_outlined),
-                  title: const Text('Koordinat'),
-                  subtitle: Text(
-                    '${report['latitude'] ?? '—'}, ${report['longitude'] ?? '—'}',
-                  ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.construction_outlined),
-                  title: const Text('Dampak yang dilaporkan'),
-                  subtitle: Text(
-                    '${report['damage_level'] ?? 'Belum tersedia'}',
-                  ),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.health_and_safety_outlined),
-                  title: const Text('Korban luka / meninggal'),
-                  subtitle: Text(
-                    '${injured ?? 'Belum diketahui'} / ${deceased ?? 'Belum diketahui'}',
-                  ),
-                ),
-              ],
+      appBar: AppBar(
+        flexibleSpace: const SiagaNowHeaderBackground(),
+        title: const Text('Detail laporan'),
+      ),
+      body: SiagaNowPageBackground(
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Text(
+              '${report['title'] ?? 'Laporan bencana'}',
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
             ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
+            const SizedBox(height: 12),
+            Card(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Deskripsi',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ListTile(
+                    leading: const Icon(Icons.fact_check_outlined),
+                    title: const Text('Status'),
+                    subtitle: Text('${report['status'] ?? 'Belum tersedia'}'),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '${report['description'] ?? 'Deskripsi tidak tersedia.'}',
+                  ListTile(
+                    leading: const Icon(Icons.category_outlined),
+                    title: const Text('Jenis kejadian'),
+                    subtitle: Text(
+                      '${report['event_type'] ?? 'Belum tersedia'}',
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.schedule_outlined),
+                    title: const Text('Waktu kejadian'),
+                    subtitle: Text(
+                      '${report['occurred_at'] ?? report['created_at'] ?? 'Belum tersedia'}',
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.place_outlined),
+                    title: const Text('Koordinat'),
+                    subtitle: Text(
+                      '${report['latitude'] ?? '—'}, ${report['longitude'] ?? '—'}',
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.construction_outlined),
+                    title: const Text('Dampak yang dilaporkan'),
+                    subtitle: Text(
+                      '${report['damage_level'] ?? 'Belum tersedia'}',
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.health_and_safety_outlined),
+                    title: const Text('Korban luka / meninggal'),
+                    subtitle: Text(
+                      '${injured ?? 'Belum diketahui'} / ${deceased ?? 'Belum diketahui'}',
+                    ),
                   ),
                 ],
               ),
             ),
-          ),
-          const _InfoBanner(
-            text: 'Laporan merupakan kiriman pengguna dan menunggu pemeriksaan petugas. Status ini bukan peringatan resmi.',
-          ),
-        ],
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Deskripsi',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${report['description'] ?? 'Deskripsi tidak tersedia.'}',
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const _InfoBanner(
+              text: 'Laporan merupakan kiriman pengguna dan menunggu pemeriksaan petugas. Status ini bukan peringatan resmi.',
+            ),
+            if (report['ai_analysis'] is Map) ...[
+              const SizedBox(height: 12),
+              _ReportAiStatusCard(
+                analysis: ReportAiAnalysis.fromJson(report['ai_analysis']),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -5538,37 +7281,45 @@ class _ReportHistoryPageState extends State<ReportHistoryPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
+      flexibleSpace: const SiagaNowHeaderBackground(),
       title: const Text('Laporan saya'),
       actions: [IconButton(onPressed: load, icon: const Icon(Icons.refresh))],
     ),
-    body: loading
-        ? const Center(child: CircularProgressIndicator())
-        : error != null
-        ? _EmptyState(text: error!)
-        : reports.isEmpty
-        ? const _EmptyState(text: 'Belum ada laporan tersimpan pada akun ini.')
-        : ListView(
-            children: reports
-                .map(
-                  (r) => Card(
-                    child: ListTile(
-                      title: Text('${r['title'] ?? 'Laporan'}'),
-                      subtitle: Text(
-                        'Status ${r['status'] ?? '—'} · ${r['created_at'] ?? ''}',
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => ReportDetailPage(
-                            report: Map<String, dynamic>.from(r as Map),
+    body: SiagaNowPageBackground(
+      child: loading
+          ? const Padding(
+              padding: EdgeInsets.all(20),
+              child: _LoadingSkeleton(rows: 3),
+            )
+          : error != null
+          ? _EmptyState(text: error!)
+          : reports.isEmpty
+          ? const _EmptyState(
+              text: 'Belum ada laporan tersimpan pada akun ini.',
+            )
+          : ListView(
+              children: reports
+                  .map(
+                    (r) => Card(
+                      child: ListTile(
+                        title: Text('${r['title'] ?? 'Laporan'}'),
+                        subtitle: Text(
+                          'Status ${r['status'] ?? '—'} · ${r['created_at'] ?? ''}\n${r['ai_analysis'] is Map ? ReportAiAnalysis.fromJson(r['ai_analysis']).label : 'Status analisis AI belum tersedia'}',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ReportDetailPage(
+                              report: Map<String, dynamic>.from(r as Map),
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                )
-                .toList(),
-          ),
+                  )
+                  .toList(),
+            ),
+    ),
   );
 }
 

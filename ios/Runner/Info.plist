@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Lokasi hanya digunakan saat Anda memilih untuk mengisi koordinat laporan bencana.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Foto profil dipilih dari galeri dan disimpan secara lokal di perangkat.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

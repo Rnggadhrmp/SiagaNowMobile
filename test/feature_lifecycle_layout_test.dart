@@ -517,7 +517,7 @@ void main() {
         ),
       );
 
-      await tester.tap(find.text('Kirim laporan'));
+      await tester.tap(find.text('Kirim'));
       await tester.pumpAndSettle();
 
       expect(find.text('Masukkan judul minimal 4 karakter.'), findsOneWidget);
@@ -534,6 +534,99 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'report form has no preset impact and requires an explicit choice',
+    (tester) async {
+      tester.view.physicalSize = const Size(1080, 4000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      var loginRequested = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ReportPage(
+            api: _api(),
+            loggedIn: false,
+            onLogin: () async => loginRequested = true,
+          ),
+        ),
+      );
+      expect(
+        tester
+            .widgetList<ChoiceChip>(find.byType(ChoiceChip))
+            .every((chip) => !chip.selected),
+        isTrue,
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Nama kejadian/bencana'),
+        'Banjir besar',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Latitude'),
+        '-0.9',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Longitude'),
+        '100.3',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Ceritakan kondisi yang terlihat'),
+        'Air mulai masuk ke rumah warga.',
+      );
+      await tester.tap(find.text('Kirim'));
+      await tester.pumpAndSettle();
+      expect(find.text('Pilih tingkat bencana.'), findsOneWidget);
+      expect(loginRequested, isFalse);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('report and login sheets fit compact screens with large text', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    for (final size in [const Size(320, 640), const Size(360, 740)]) {
+      tester.view.physicalSize = size;
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: const TextScaler.linear(1.5)),
+            child: child!,
+          ),
+          home: ReportPage(api: _api(), loggedIn: false, onLogin: () async {}),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(ReportPage), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: const TextScaler.linear(1.5)),
+            child: child!,
+          ),
+          home: Scaffold(body: AuthSheet(api: _api())),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Lupa Kata Sandi? — Belum tersedia'), findsOneWidget);
+      final forgotButton = tester.widget<TextButton>(
+        find
+            .ancestor(
+              of: find.text('Lupa Kata Sandi? — Belum tersedia'),
+              matching: find.byType(TextButton),
+            )
+            .first,
+      );
+      expect(forgotButton.onPressed, isNull);
+      expect(tester.takeException(), isNull);
+    }
+  });
 
   testWidgets(
     'profile keeps API values visible on compact and standard phones',
@@ -706,9 +799,10 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    for (final includeReportId in [false, true]) {
+    for (final includeReportId in [true, false]) {
       await tester.pumpWidget(
         MaterialApp(
+          key: ValueKey(includeReportId),
           home: Scaffold(
             body: ReportPage(
               api: _reportSubmissionApi(includeReportId: includeReportId),
@@ -727,9 +821,19 @@ void main() {
       await tester.enterText(fields.at(1), '-0.95');
       await tester.enterText(fields.at(2), '100.4');
       await tester.enterText(fields.at(5), 'Air menggenangi jalan utama.');
-      await tester.ensureVisible(find.text('Kirim laporan'));
+      final lowestImpact = find.byKey(const ValueKey('report-impact-Rendah'));
+      await tester.ensureVisible(lowestImpact);
+      await tester.tap(lowestImpact);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Kirim laporan'));
+      expect(
+        tester
+            .widgetList<ChoiceChip>(find.byType(ChoiceChip))
+            .any((chip) => chip.selected),
+        isTrue,
+      );
+      await tester.ensureVisible(find.text('Kirim'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Kirim'));
       await tester.pump();
       if (includeReportId) {
         await tester.pumpAndSettle();
@@ -739,6 +843,8 @@ void main() {
 
       if (includeReportId) {
         expect(find.text('Laporan Tersimpan'), findsOneWidget);
+        expect(find.text('Lokasi kejadian'), findsOneWidget);
+        expect(find.text('Laporan banjir uji'), findsOneWidget);
       } else {
         expect(find.text('Laporan Tersimpan'), findsNothing);
         expect(

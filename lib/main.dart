@@ -1019,7 +1019,7 @@ class _SiagaNowAppState extends State<SiagaNowApp> {
         child: BackdropFilter(
           filter: ui.ImageFilter.blur(sigmaX: 3, sigmaY: 3),
           child: ColoredBox(
-            color: const Color(0xF5F7FFF9),
+            color: const Color(0xFFF7FFF9),
             child: AuthSheet(api: api),
           ),
         ),
@@ -3718,13 +3718,17 @@ class _ReportPageState extends State<ReportPage> {
   final lng = TextEditingController();
   final injured = TextEditingController();
   final deceased = TextEditingController();
-  String eventType = 'Banjir', damage = 'Rendah';
+  String eventType = 'Banjir';
+  String? damage;
+  bool showDamageError = false;
   DateTime occurredAt = DateTime.now();
   bool sending = false, gettingLocation = false, historyLoading = false;
   List<dynamic> reports = [];
   List<PlatformFile> evidence = [];
   @override
   void dispose() {
+    lat.removeListener(_locationEdited);
+    lng.removeListener(_locationEdited);
     title.dispose();
     description.dispose();
     lat.dispose();
@@ -3737,7 +3741,13 @@ class _ReportPageState extends State<ReportPage> {
   @override
   void initState() {
     super.initState();
+    lat.addListener(_locationEdited);
+    lng.addListener(_locationEdited);
     if (widget.loggedIn) loadReports();
+  }
+
+  void _locationEdited() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -3774,6 +3784,99 @@ class _ReportPageState extends State<ReportPage> {
       }
     }
     if (mounted) setState(() => gettingLocation = false);
+  }
+
+  Future<void> pickMapLocation() async {
+    final existingLat = double.tryParse(lat.text);
+    final existingLng = double.tryParse(lng.text);
+    final initialCenter = existingLat != null && existingLng != null
+        ? LatLng(existingLat, existingLng)
+        : const LatLng(-2.5, 118);
+    final selected = await showDialog<LatLng>(
+      context: context,
+      builder: (dialogContext) {
+        LatLng? point;
+        return StatefulBuilder(
+          builder: (context, setDialogState) => Dialog.fullscreen(
+            child: SafeArea(
+              child: Column(
+                children: [
+                  AppBar(
+                    leading: IconButton(
+                      tooltip: 'Tutup peta',
+                      onPressed: () => Navigator.pop(dialogContext),
+                      icon: const Icon(Icons.close),
+                    ),
+                    title: const Text('Pilih lokasi kejadian'),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text(
+                      'Ketuk peta pada titik kejadian. Lokasi tidak dipilih otomatis.',
+                    ),
+                  ),
+                  Expanded(
+                    child: FlutterMap(
+                      options: MapOptions(
+                        initialCenter: initialCenter,
+                        initialZoom: existingLat == null ? 4 : 14,
+                        onTap: (_, selectedPoint) =>
+                            setDialogState(() => point = selectedPoint),
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate: mapTileUrl,
+                          userAgentPackageName: appUserAgent,
+                        ),
+                        if (point != null)
+                          MarkerLayer(
+                            markers: [
+                              Marker(
+                                point: point!,
+                                width: 42,
+                                height: 48,
+                                child: const Icon(
+                                  Icons.location_pin,
+                                  color: Color(0xFFB3261E),
+                                  size: 42,
+                                ),
+                              ),
+                            ],
+                          ),
+                        RichAttributionWidget(
+                          alignment: AttributionAlignment.bottomRight,
+                          attributions: [
+                            TextSourceAttribution(
+                              '© OpenStreetMap contributors',
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: point == null
+                            ? null
+                            : () => Navigator.pop(dialogContext, point),
+                        child: const Text('Gunakan lokasi ini'),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    if (selected != null && mounted) {
+      lat.text = selected.latitude.toStringAsFixed(7);
+      lng.text = selected.longitude.toStringAsFixed(7);
+    }
   }
 
   Future<void> pickEvidence() async {
@@ -3815,6 +3918,10 @@ class _ReportPageState extends State<ReportPage> {
   Future<void> submit() async {
     if (sending) return;
     if (!form.currentState!.validate()) return;
+    if (damage == null) {
+      setState(() => showDamageError = true);
+      return;
+    }
     if (!widget.loggedIn) {
       widget.onLogin();
       return;
@@ -3831,7 +3938,7 @@ class _ReportPageState extends State<ReportPage> {
         'event_time':
             '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
         'event_type': eventType,
-        'damage_level': damage,
+        'damage_level': damage!,
         'description': description.text.trim(),
         if (injured.text.isNotEmpty) 'injured': injured.text,
         if (deceased.text.isNotEmpty) 'deceased': deceased.text,
@@ -3848,6 +3955,9 @@ class _ReportPageState extends State<ReportPage> {
         if (outerShelter != null) reportData['shelter'] = outerShelter;
       }
       final receipt = ReportReceipt.fromJson(reportData);
+      final incidentTitle = title.text.trim();
+      final incidentLatitude = double.parse(lat.text);
+      final incidentLongitude = double.parse(lng.text);
       var recommendedShelter = receipt.shelter;
       if (recommendedShelter == null &&
           kDebugMode &&
@@ -3887,6 +3997,7 @@ class _ReportPageState extends State<ReportPage> {
         injured.clear();
         deceased.clear();
         evidence.clear();
+        damage = null;
         setState(() => sending = false);
         unawaited(loadReports());
         unawaited(
@@ -3895,6 +4006,9 @@ class _ReportPageState extends State<ReportPage> {
               builder: (_) => ReportSuccessPage(
                 shelter: recommendedShelter,
                 aiAnalysis: receipt.aiAnalysis,
+                incidentTitle: incidentTitle,
+                incidentLatitude: incidentLatitude,
+                incidentLongitude: incidentLongitude,
                 onReturnHome: () {
                   Navigator.of(context).popUntil((route) => route.isFirst);
                   widget.onHome?.call();
@@ -3949,13 +4063,13 @@ class _ReportPageState extends State<ReportPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Detail kejadian',
+                  'Deskripsi bencana',
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
                 ),
                 const SizedBox(height: 14),
                 _field(
                   title,
-                  'Judul laporan',
+                  'Nama kejadian/bencana',
                   validator: (v) => (v == null || v.trim().length < 4)
                       ? 'Masukkan judul minimal 4 karakter.'
                       : null,
@@ -3972,7 +4086,67 @@ class _ReportPageState extends State<ReportPage> {
                       .toList(),
                   onChanged: (v) => setState(() => eventType = v!),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
+                const Text(
+                  'Lokasi kejadian',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: gettingLocation ? null : useDeviceLocation,
+                    icon: gettingLocation
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.my_location),
+                    label: Text(
+                      gettingLocation
+                          ? 'Mengambil lokasi…'
+                          : 'Pilih lokasi dari GPS',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: pickMapLocation,
+                    icon: const Icon(Icons.map_outlined),
+                    label: const Text('Pilih titik di peta'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _field(
+                        lat,
+                        'Latitude',
+                        validator: (v) => _coordinate(v, -90, 90),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _field(
+                        lng,
+                        'Longitude',
+                        validator: (v) => _coordinate(v, -180, 180),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                _reportLocationPreview(),
+                const SizedBox(height: 16),
+                const Text(
+                  'Waktu kejadian',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
                 Row(
                   children: [
                     Expanded(
@@ -3999,9 +4173,7 @@ class _ReportPageState extends State<ReportPage> {
                           }
                         },
                         icon: const Icon(Icons.calendar_today_outlined),
-                        label: Text(
-                          '${occurredAt.year}-${occurredAt.month.toString().padLeft(2, '0')}-${occurredAt.day.toString().padLeft(2, '0')}',
-                        ),
+                        label: const Text('Pilih tanggal'),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -4025,71 +4197,25 @@ class _ReportPageState extends State<ReportPage> {
                           }
                         },
                         icon: const Icon(Icons.schedule),
-                        label: Text(
-                          '${occurredAt.hour.toString().padLeft(2, '0')}:${occurredAt.minute.toString().padLeft(2, '0')}',
-                        ),
+                        label: const Text('Pilih waktu'),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: gettingLocation ? null : useDeviceLocation,
-                    icon: gettingLocation
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.my_location),
-                    label: Text(
-                      gettingLocation
-                          ? 'Mengambil lokasi…'
-                          : 'Gunakan lokasi perangkat',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _field(
-                        lat,
-                        'Latitude',
-                        validator: (v) => _coordinate(v, -90, 90),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _field(
-                        lng,
-                        'Longitude',
-                        validator: (v) => _coordinate(v, -180, 180),
-                      ),
-                    ),
-                  ],
-                ),
                 const Padding(
                   padding: EdgeInsets.only(top: 7),
                   child: Text(
-                    'Koordinat tidak diisi otomatis. Gunakan lokasi perangkat atau masukkan titik kejadian secara manual.',
+                    'Titik peta hanya ditampilkan setelah lokasi dipilih. Jika GPS tidak tersedia, masukkan koordinat kejadian.',
                     style: TextStyle(fontSize: 12, color: Color(0xFF85661B)),
                   ),
                 ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: damage,
-                  decoration: const InputDecoration(
-                    labelText: 'Dampak yang terlihat',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: ['Rendah', 'Sedang', 'Tinggi']
-                      .map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                      .toList(),
-                  onChanged: (v) => setState(() => damage = v!),
+                const SizedBox(height: 16),
+                const Text(
+                  'Jumlah korban',
+                  style: TextStyle(fontWeight: FontWeight.w700),
                 ),
+                const SizedBox(height: 8),
                 const SizedBox(height: 12),
                 Row(
                   children: [
@@ -4118,6 +4244,37 @@ class _ReportPageState extends State<ReportPage> {
                   ),
                 ),
                 const SizedBox(height: 12),
+                const Text(
+                  'Tingkat bencana',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: ['Rendah', 'Sedang', 'Tinggi']
+                      .map(
+                        (value) => ChoiceChip(
+                          key: ValueKey('report-impact-$value'),
+                          label: Text(value),
+                          selected: damage == value,
+                          onSelected: (selected) => setState(() {
+                            damage = selected ? value : null;
+                            showDamageError = false;
+                          }),
+                          selectedColor: const Color(0xFFD4F0E0),
+                        ),
+                      )
+                      .toList(),
+                ),
+                if (showDamageError && damage == null)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Pilih tingkat bencana.',
+                      style: TextStyle(color: Color(0xFFB3261E), fontSize: 12),
+                    ),
+                  ),
+                const SizedBox(height: 12),
                 _field(
                   description,
                   'Ceritakan kondisi yang terlihat',
@@ -4143,20 +4300,66 @@ class _ReportPageState extends State<ReportPage> {
                       style: const TextStyle(fontSize: 12),
                     ),
                   ),
-                const SizedBox(height: 18),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: sending ? null : submit,
-                    icon: sending
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.send_outlined),
-                    label: Text(sending ? 'Mengirim…' : 'Kirim laporan'),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEAF7EF),
+                    borderRadius: BorderRadius.circular(12),
                   ),
+                  child: const Text(
+                    'TIPS\nPastikan lokasi dan waktu sesuai kejadian. Jangan mengambil risiko saat mengumpulkan bukti.',
+                    style: TextStyle(height: 1.4, color: Color(0xFF174B38)),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: sending
+                            ? null
+                            : () => setState(() {
+                                form.currentState?.reset();
+                                title.clear();
+                                description.clear();
+                                lat.clear();
+                                lng.clear();
+                                injured.clear();
+                                deceased.clear();
+                                evidence.clear();
+                                damage = null;
+                                showDamageError = false;
+                                eventType = 'Banjir';
+                                occurredAt = DateTime.now();
+                              }),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFB3261E),
+                          side: const BorderSide(color: Color(0xFFB3261E)),
+                        ),
+                        child: const Text('Batal'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: sending ? null : submit,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF01543F),
+                        ),
+                        icon: sending
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.send_outlined),
+                        label: Text(sending ? 'Mengirim…' : 'Kirim'),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -4220,6 +4423,73 @@ class _ReportPageState extends State<ReportPage> {
           (int.tryParse(value) != null && int.parse(value) >= 0)
       ? null
       : 'Masukkan bilangan bulat 0 atau lebih.';
+
+  Widget _reportLocationPreview() {
+    final latitude = double.tryParse(lat.text);
+    final longitude = double.tryParse(lng.text);
+    final hasLocation =
+        latitude != null &&
+        longitude != null &&
+        latitude >= -90 &&
+        latitude <= 90 &&
+        longitude >= -180 &&
+        longitude <= 180;
+    if (!hasLocation) {
+      return Container(
+        height: 112,
+        width: double.infinity,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: const Color(0xFFF0F4F2),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Text('Pratinjau peta muncul setelah lokasi dipilih.'),
+      );
+    }
+    final point = LatLng(latitude, longitude);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
+        height: 150,
+        child: FlutterMap(
+          options: MapOptions(
+            initialCenter: point,
+            initialZoom: 14,
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.none,
+            ),
+          ),
+          children: [
+            TileLayer(
+              urlTemplate: mapTileUrl,
+              userAgentPackageName: appUserAgent,
+            ),
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: point,
+                  width: 42,
+                  height: 48,
+                  child: const Icon(
+                    Icons.location_pin,
+                    color: Color(0xFFB3261E),
+                    size: 42,
+                  ),
+                ),
+              ],
+            ),
+            RichAttributionWidget(
+              alignment: AttributionAlignment.bottomRight,
+              attributions: [
+                TextSourceAttribution('© OpenStreetMap contributors'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _field(
     TextEditingController c,
     String label, {
@@ -4255,11 +4525,17 @@ class ReportSuccessPage extends StatelessWidget {
     required this.onReturnHome,
     this.shelter,
     this.aiAnalysis,
+    this.incidentTitle,
+    this.incidentLatitude,
+    this.incidentLongitude,
   });
 
   final VoidCallback onReturnHome;
   final ReportShelterInfo? shelter;
   final ReportAiAnalysis? aiAnalysis;
+  final String? incidentTitle;
+  final double? incidentLatitude;
+  final double? incidentLongitude;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -4410,6 +4686,42 @@ class ReportSuccessPage extends StatelessWidget {
                                   ),
                                 ),
                               ),
+                              if (incidentTitle != null &&
+                                  incidentLatitude != null &&
+                                  incidentLongitude != null) ...[
+                                const SizedBox(height: 16),
+                                Container(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 320,
+                                  ),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEAF7EF),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      const Text(
+                                        'Lokasi kejadian',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF174B38),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        incidentTitle!,
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      Text(
+                                        '${incidentLatitude!.toStringAsFixed(5)}, ${incidentLongitude!.toStringAsFixed(5)}',
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                               if (shelter != null) ...[
                                 const SizedBox(height: 22),
                                 _ReportShelterCard(shelter: shelter!),
@@ -7594,14 +7906,14 @@ class _AuthSheetState extends State<AuthSheet> {
             ),
             const SizedBox(height: 22),
             Text(
-              registering ? 'Buat akun SiagaNow' : 'Selamat datang',
+              registering ? 'Buat akun SiagaNow' : 'Selamat Datang',
               style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
             Text(
               registering
-                  ? 'Daftar dengan data yang dibutuhkan akun Anda.'
-                  : 'Masuk dengan akun SiagaNow Anda.',
+                  ? 'Daftar menggunakan akun SiagaNow.'
+                  : 'Masuk menggunakan akun SiagaNow.',
             ),
             const SizedBox(height: 12),
             Center(
@@ -7649,9 +7961,9 @@ class _AuthSheetState extends State<AuthSheet> {
             ] else
               TextFormField(
                 controller: identifier,
-                decoration: const InputDecoration(
+                decoration: _authInputDecoration(
                   labelText: 'Email atau nomor HP',
-                  border: OutlineInputBorder(),
+                  icon: Icons.person_outline,
                 ),
                 validator: (v) =>
                     v == null || v.trim().isEmpty ? 'Wajib diisi.' : null,
@@ -7660,9 +7972,9 @@ class _AuthSheetState extends State<AuthSheet> {
             TextFormField(
               controller: password,
               obscureText: !passwordVisible,
-              decoration: InputDecoration(
+              decoration: _authInputDecoration(
                 labelText: 'Kata sandi',
-                border: const OutlineInputBorder(),
+                icon: Icons.lock_outline,
                 suffixIcon: IconButton(
                   tooltip: passwordVisible
                       ? 'Sembunyikan kata sandi'
@@ -7726,6 +8038,27 @@ class _AuthSheetState extends State<AuthSheet> {
                 ),
               ),
             ),
+            if (!registering) ...[
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: null,
+                  child: const Text('Lupa Kata Sandi? — Belum tersedia'),
+                ),
+              ),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF7EF),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  'Gunakan Password sesuai dengan yang anda buat.',
+                  style: TextStyle(color: Color(0xFF174B38)),
+                ),
+              ),
+            ],
             Center(
               child: TextButton(
                 onPressed: busy
@@ -7745,6 +8078,29 @@ class _AuthSheetState extends State<AuthSheet> {
         ),
       ),
     ),
+  );
+
+  InputDecoration _authInputDecoration({
+    required String labelText,
+    required IconData icon,
+    Widget? suffixIcon,
+  }) => InputDecoration(
+    labelText: labelText,
+    border: const OutlineInputBorder(),
+    prefixIcon: SizedBox(
+      width: 52,
+      child: Padding(
+        padding: const EdgeInsets.all(5),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: const Color(0xFFD4F0E0),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: const Color(0xFF01543F), size: 20),
+        ),
+      ),
+    ),
+    suffixIcon: suffixIcon,
   );
 }
 

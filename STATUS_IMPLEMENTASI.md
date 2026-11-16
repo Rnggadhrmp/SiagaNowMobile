@@ -289,3 +289,17 @@ Catatan ini melengkapi dan tidak menggantikan riwayat terdahulu di `IMPLEMENTATI
 - **Belum tersedia:** routing internal dan data fasilitas/foto shelter belum disediakan backend/provider; layar eksternal peta menggunakan default GPS peta pengguna. Konfirmasi kedatangan manual bukan deteksi GPS. Backend tidak diubah.
 - **Test tambahan:** model verifikasi/kapasitas shelter; rendering detail pada 320×640 dan 360×740 dengan text scale 1,5; routing fallback tanpa ETA; akses status aman untuk login/non-login dan hanya konfirmasi setelah callback sukses.
 - **Validasi:** `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (50 test); `git diff --check` tidak menemukan whitespace error (peringatan LF→CRLF hanya untuk dokumen status).
+
+## Tahap 21 — Formulir laporan dan autentikasi (implementasi)
+
+**Tanggal:** 16 November 2026
+
+- **Formulir laporan:** urutan kini mengikuti BRD: nama kejadian, lokasi dan pilihan GPS/peta, pratinjau titik, waktu kejadian, korban, tingkat bencana, uraian, lampiran, tips, lalu Batal/Kirim. Tingkat bencana tidak terpilih otomatis dan wajib dipilih sebelum login/API; jumlah korban kosong tetap tidak dikirim (NULL), sedangkan `0` eksplisit dikirim. Lampiran tetap maksimal lima sesuai endpoint mobile yang ada.
+- **Lokasi:** pengguna dapat meminta GPS (permission tetap dikelola `geolocator`), memilih titik dengan mengetuk peta, atau mengisi koordinat manual. Peta kecil hanya memperlihatkan pin pada koordinat yang dipilih; tile URL memakai konfigurasi yang sama dengan layar peta (`SIAGANOW_TILE_URL`, fallback OpenStreetMap dengan atribusi). Tidak ada koordinat contoh yang ditetapkan sebagai lokasi kejadian.
+- **Konfirmasi sukses:** sesudah server mengembalikan ID laporan, halaman status menampilkan nama dan koordinat lokasi kejadian dari form (BRD B-12), terpisah dari info shelter rekomendasi.
+- **Login/daftar:** bottom sheet kini memakai permukaan solid, ikon bidang pada tile hijau muda, kontrol lihat kata sandi, informasi password, serta tautan `Lupa Kata Sandi? — Belum tersedia` yang nonaktif. Kontrak `POST /api/login`, `POST /api/register`, token dan `GET /api/user` tidak berubah. Tidak ada klaim berhasil mengubah data profil maupun memulihkan password.
+- **Backend:** tidak diubah. Form laporan memakai endpoint upload multipart yang sudah tersedia; login/daftar memakai endpoint mobile yang sudah ada. Pemilihan peta menggunakan provider tile yang telah dipakai aplikasi.
+- **File diubah:** `lib/main.dart`, `test/feature_lifecycle_layout_test.dart`, dan dokumen status ini.
+- **Pengujian tambahan:** severity awal tidak terpilih dan harus dipilih sebelum alur login; formulir dan login dirender pada 320×640 dan 360×740 dengan text scale 1,5; test konfirmasi sukses memeriksa lokasi kejadian dan server ID.
+- **Validasi:** `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (52 test); `git diff --check` bersih (peringatan Git LF→CRLF pada file Markdown saja).
+- **Build APK dan QA visual emulator:** dijadwalkan pada Tahap 24; belum dinyatakan berhasil pada tahap ini.

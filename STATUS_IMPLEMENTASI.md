@@ -303,3 +303,15 @@ Catatan ini melengkapi dan tidak menggantikan riwayat terdahulu di `IMPLEMENTATI
 - **Pengujian tambahan:** severity awal tidak terpilih dan harus dipilih sebelum alur login; formulir dan login dirender pada 320×640 dan 360×740 dengan text scale 1,5; test konfirmasi sukses memeriksa lokasi kejadian dan server ID.
 - **Validasi:** `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (52 test); `git diff --check` bersih (peringatan Git LF→CRLF pada file Markdown saja).
 - **Build APK dan QA visual emulator:** dijadwalkan pada Tahap 24; belum dinyatakan berhasil pada tahap ini.
+
+## Tahap 22 — Layanan darurat dan daftar kontak lokal (implementasi)
+
+**Tanggal:** 16 November 2026
+
+- **Kontak instansi:** layar menampilkan BPBD, Basarnas, Polisi, Pemadam Kebakaran, dan Rumah Sakit Terdekat. Nomor kosong diberi label `Belum diisi — ketuk Edit untuk menambahkan`; tidak ada nomor instansi yang ditebak. PCC 112 Padang tetap ditampilkan terpisah dengan nomor `112` dan sumber yang telah ada di aplikasi.
+- **Kontak terdekat:** tersedia baris Orang Tua / Kerabat. Edit/Tambah membuka form nomor telepon, validasi karakter dasar, opsi hapus, dan pesan penyimpanan lokal.
+- **Penyimpanan dan panggilan:** nomor kontak disimpan persisten di perangkat melalui `SharedPreferences` pada key `siaganow.emergency_contacts.v1`. Tidak ada sinkronisasi server. Ikon telepon hanya membuka `tel:` dialer dan aplikasi hanya memberi pesan jika dialer tidak tersedia; pesan suara nonaktif dengan status `Belum tersedia` (TBD-11).
+- **File diubah:** `lib/main.dart`, `lib/screens/emergency_contacts_page.dart`, `lib/services/emergency_contacts_store.dart`, `test/emergency_contacts_test.dart`, `test/feature_lifecycle_layout_test.dart`, dan dokumen ini.
+- **Pengujian tambahan:** data default 112 terpisah dari BPBD; simpan/hapus nomor lokal; ubah nomor instansi dari UI; verifikasi tel URI; semua daftar ditampilkan pada 320×640 dan 360×740 dengan text scale 1,5.
+- **Validasi:** `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (55 test); `git diff --check` bersih (peringatan Git LF→CRLF hanya untuk dokumen Markdown).
+- **Belum selesai:** nomor instansi di luar PCC 112 Padang belum disediakan dan harus diverifikasi/dimasukkan pengguna. Kontak lokal tersimpan pada perangkat ini saja. Build APK dan QA visual emulator dijadwalkan pada Tahap 24.

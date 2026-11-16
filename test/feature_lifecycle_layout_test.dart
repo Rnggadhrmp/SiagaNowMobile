@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:siaga_now_mobile/main.dart';
 
 ApiService _api() => ApiService(
@@ -295,6 +296,7 @@ void main() {
   testWidgets(
     'five primary tabs stay readable and track selection on compact screens',
     (tester) async {
+      SharedPreferences.setMockInitialValues({});
       addTearDown(() {
         tester.view.resetPhysicalSize();
         tester.view.resetDevicePixelRatio();
@@ -353,7 +355,7 @@ void main() {
 
         await tester.tap(find.text('Darurat'));
         await tester.pumpAndSettle();
-        expect(find.text('Layanan darurat'), findsOneWidget);
+        expect(find.text('Kontak Instansi'), findsWidgets);
         expect(
           find.byWidgetPredicate(
             (widget) =>

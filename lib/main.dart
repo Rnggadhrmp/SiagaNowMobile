@@ -31,6 +31,7 @@ import 'services/profile_photo_service.dart';
 import 'models/shelter_record.dart';
 import 'services/routing_service.dart';
 import 'screens/evacuation_screens.dart';
+import 'screens/emergency_contacts_page.dart';
 import 'widgets/siaganow_page_background.dart';
 
 export 'widgets/siaganow_page_background.dart';
@@ -6550,68 +6551,6 @@ class _SimulationNotice extends StatelessWidget {
       ],
     ),
   );
-}
-
-class EmergencyContactsPage extends StatelessWidget {
-  const EmergencyContactsPage({super.key, this.embedded = false});
-
-  final bool embedded;
-  Future<void> _call(BuildContext context) async {
-    final opened = await launchUrl(Uri(scheme: 'tel', path: '112'));
-    if (!opened && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Dialer tidak tersedia pada perangkat ini.'),
-        ),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final content = ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        const Text(
-          'Layanan darurat',
-          style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Kontak yang dapat ditampilkan aplikasi saat ini terbatas pada layanan yang sudah dicantumkan untuk Kota Padang.',
-        ),
-        const SizedBox(height: 18),
-        Card(
-          child: ListTile(
-            leading: const CircleAvatar(child: Icon(Icons.emergency_outlined)),
-            title: const Text('PCC 112 · Kota Padang'),
-            subtitle: const Text(
-              'Layanan panggilan darurat gratis untuk Kota Padang. Sumber: sigap.padang.go.id. Untuk wilayah lain, hubungi BPBD kabupaten/kota setempat.',
-            ),
-            isThreeLine: true,
-            trailing: IconButton(
-              tooltip: 'Buka dialer',
-              onPressed: () => _call(context),
-              icon: const Icon(Icons.call_outlined),
-            ),
-            onTap: () => _call(context),
-          ),
-        ),
-        const SizedBox(height: 14),
-        const _EmptyState(
-          text: 'Kontak pribadi/keluarga belum tersimpan. Pengelolaan kontak keluarga belum tersedia pada aplikasi ini.',
-        ),
-      ],
-    );
-    if (embedded) return content;
-    return Scaffold(
-      appBar: AppBar(
-        flexibleSpace: const SiagaNowHeaderBackground(),
-        title: const Text('Daftar Kontak'),
-      ),
-      body: SiagaNowPageBackground(child: content),
-    );
-  }
 }
 
 class _ProfileMenuButton extends StatelessWidget {

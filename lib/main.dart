@@ -1094,17 +1094,42 @@ class WeatherPeriod {
     this.temperature,
     this.condition,
     this.humidity,
+    this.rainMm,
+    this.windKmh,
   });
   final String? localDateTime;
   final num? temperature;
   final String? condition;
   final int? humidity;
+  final num? rainMm;
+  final num? windKmh;
   factory WeatherPeriod.fromJson(Map<String, dynamic> json) => WeatherPeriod(
     localDateTime: json['local_datetime']?.toString(),
     temperature: num.tryParse('${json['temperature']}'),
     condition: json['condition']?.toString(),
     humidity: int.tryParse('${json['humidity']}'),
+    rainMm: num.tryParse('${json['rain_mm']}'),
+    windKmh: num.tryParse('${json['wind_kmh']}'),
   );
+}
+
+IconData weatherIconForCondition(String? condition) {
+  final value = (condition ?? '').toLowerCase();
+  if (value.contains('petir') || value.contains('guntur')) {
+    return Icons.thunderstorm_rounded;
+  }
+  if (value.contains('hujan')) return Icons.umbrella_rounded;
+  if (value.contains('kabut') || value.contains('asap')) {
+    return Icons.foggy;
+  }
+  if (value.contains('cerah') && value.contains('awan')) {
+    return Icons.wb_cloudy_rounded;
+  }
+  if (value.contains('cerah')) return Icons.wb_sunny_rounded;
+  if (value.contains('awan') || value.contains('berawan')) {
+    return Icons.cloud_rounded;
+  }
+  return Icons.cloud_outlined;
 }
 
 abstract interface class OnboardingProgressStore {
@@ -2237,6 +2262,11 @@ class _HomePageState extends State<HomePage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
+                        Icon(
+                          weatherIconForCondition(period.condition),
+                          size: 22,
+                          color: const Color(0xFF116349),
+                        ),
                         Text(
                           period.localDateTime ?? 'Waktu tidak tersedia',
                           maxLines: 2,
@@ -2956,15 +2986,50 @@ class WeatherDetailPage extends StatelessWidget {
     final values = weather is Map
         ? Map<String, dynamic>.from(weather as Map)
         : <String, dynamic>{};
+    final firstForecastDate = forecasts.isEmpty
+        ? null
+        : forecasts.first.localDateTime?.split('T').first;
+    final futureDays = <String, WeatherPeriod>{};
+    for (final forecast in forecasts) {
+      final date = forecast.localDateTime?.split('T').first;
+      if (date != null && date != firstForecastDate) {
+        futureDays.putIfAbsent(date, () => forecast);
+      }
+    }
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: const SiagaNowHeaderBackground(),
-        title: const Text('Cuaca dan peringatan'),
+        title: const Text('Cuaca'),
       ),
       body: SiagaNowPageBackground(
         child: ListView(
           padding: const EdgeInsets.all(18),
           children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: TextField(
+                    readOnly: true,
+                    decoration: InputDecoration(
+                      hintText: 'Pencarian lokasi',
+                      prefixIcon: Icon(Icons.search),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  tooltip: 'Cari lokasi',
+                  onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Pencarian lokasi belum tersedia.'),
+                    ),
+                  ),
+                  icon: const Icon(Icons.search),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -3014,11 +3079,43 @@ class WeatherDetailPage extends StatelessWidget {
                 ],
               ),
             ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _WeatherMetricTile(
+                    label: 'Kelembapan Air',
+                    value: values['humidity'] == null
+                        ? 'Belum tersedia'
+                        : '${values['humidity']}%',
+                    icon: Icons.water_drop_outlined,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: _WeatherMetricTile(
+                    label: 'Kelembapan Tanah',
+                    value: 'Data belum tersedia',
+                    icon: Icons.grass_outlined,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _WeatherMetricTile(
+                    label: 'Kecepatan Angin',
+                    value: values['wind_kmh'] == null
+                        ? 'Belum tersedia'
+                        : '${values['wind_kmh']} km/j',
+                    icon: Icons.air_rounded,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 14),
             _WarningStatusCard(warning: warning, loading: false, error: null),
             const SizedBox(height: 20),
             const Text(
-              'Prakiraan BMKG',
+              'Prakiraan Cuaca Hari Ini',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
             ),
             if (forecasts.isEmpty)
@@ -3026,39 +3123,139 @@ class WeatherDetailPage extends StatelessWidget {
                 text: 'Interval prakiraan belum tersedia dari API.',
               )
             else
-              ...forecasts.map(
-                (period) => Card(
-                  child: ListTile(
-                    leading: const Icon(
-                      Icons.cloud_outlined,
-                      color: Color(0xFF397A60),
-                    ),
-                    title: Text(period.localDateTime ?? 'Waktu belum tersedia'),
-                    subtitle: Text(
-                      '${period.condition ?? 'Kondisi belum tersedia'}${period.humidity == null ? '' : ' · Kelembapan ${period.humidity}%'}',
-                    ),
-                    trailing: Text(
-                      period.temperature == null
-                          ? '—'
-                          : '${period.temperature}°',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 17,
-                      ),
-                    ),
-                  ),
-                ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: forecasts
+                    .where(
+                      (period) =>
+                          period.localDateTime?.split('T').first ==
+                          firstForecastDate,
+                    )
+                    .take(4)
+                    .map((period) => _WeatherForecastTile(period: period))
+                    .toList(),
+              ),
+            const SizedBox(height: 20),
+            const Text(
+              'Prakiraan Yang Akan Datang',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            ),
+            if (futureDays.isEmpty)
+              const _EmptyState(
+                text: 'Prakiraan hari mendatang belum tersedia dari API.',
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: futureDays.values
+                    .take(4)
+                    .map((period) => _WeatherForecastTile(period: period))
+                    .toList(),
               ),
             const SizedBox(height: 10),
             const Text(
-              'Prakiraan berlaku untuk wilayah administrasi dan bukan pengukuran di alamat rumah.',
+              'Prakiraan BMKG berlaku untuk wilayah administrasi dan bukan pengukuran di alamat rumah.',
               style: TextStyle(fontSize: 12, color: Color(0xFF68756B)),
+            ),
+            Text(
+              'Sumber: ${values['source'] ?? 'belum dicantumkan'}${values['updated_at'] == null ? '' : ' · Diperbarui ${values['updated_at']}'}',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF68756B)),
             ),
           ],
         ),
       ),
     );
   }
+}
+
+class _WeatherMetricTile extends StatelessWidget {
+  const _WeatherMetricTile({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    constraints: const BoxConstraints(minHeight: 96),
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 10),
+    decoration: BoxDecoration(
+      color: SiagaNowSurfaceTokens.mintInfo,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(icon, color: const Color(0xFF116349), size: 20),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+        ),
+      ],
+    ),
+  );
+}
+
+class _WeatherForecastTile extends StatelessWidget {
+  const _WeatherForecastTile({required this.period});
+
+  final WeatherPeriod period;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 74,
+    constraints: const BoxConstraints(minHeight: 104),
+    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 9),
+    decoration: BoxDecoration(
+      color: SiagaNowSurfaceTokens.mintInfo,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          period.localDateTime?.replaceFirst('T', '\n') ??
+              'Waktu belum tersedia',
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 9),
+        ),
+        Icon(
+          weatherIconForCondition(period.condition),
+          color: const Color(0xFF116349),
+          size: 22,
+        ),
+        Text(
+          period.temperature == null ? '—' : '${period.temperature}°',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        Text(
+          period.condition ?? 'Belum tersedia',
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 8),
+        ),
+      ],
+    ),
+  );
 }
 
 class ShelterPage extends StatefulWidget {
@@ -6925,10 +7122,12 @@ class NewsPage extends StatefulWidget {
 }
 
 class _NewsPageState extends State<NewsPage> {
+  static const _pageSize = 5;
   bool loading = true;
   String? error;
   List<dynamic> articles = [];
   String? type;
+  int currentPage = 1;
   @override
   void initState() {
     super.initState();
@@ -6944,6 +7143,12 @@ class _NewsPageState extends State<NewsPage> {
       final response = await widget.api.get('news');
       articles = response['data'] is List ? response['data'] as List : [];
       type = response['data_type']?.toString();
+      final pageCount = (articles.length / _pageSize).ceil();
+      if (pageCount == 0) {
+        currentPage = 1;
+      } else if (currentPage > pageCount) {
+        currentPage = pageCount;
+      }
     } catch (e) {
       error = '$e';
       articles = [];
@@ -6951,75 +7156,214 @@ class _NewsPageState extends State<NewsPage> {
     if (mounted) setState(() => loading = false);
   }
 
-  @override
-  Widget build(BuildContext context) => RefreshIndicator(
-    onRefresh: load,
-    child: ListView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 112),
-      children: [
-        const Text(
-          'Berita kebencanaan',
-          style: TextStyle(fontSize: 27, fontWeight: FontWeight.w800),
-        ),
-        if (type == 'simulation')
-          const Padding(padding: EdgeInsets.only(top: 12), child: DemoBadge()),
-        if (loading)
-          const _LoadingSkeleton(rows: 3)
-        else if (articles.isEmpty)
-          _EmptyState(
-            text: error ?? 'Belum tersedia berita kejadian terverifikasi.',
-          )
-        else
-          ...articles.asMap().entries.map((entry) {
-            final index = entry.key;
-            final item = entry.value;
-            final article = Map<String, dynamic>.from(item as Map);
-            final image = article['image_url'] ?? article['image'];
-            final remoteImage = image is String && image.startsWith('http');
-            return Card(
-              child: ListTile(
-                leading: SizedBox(
-                  width: 60,
-                  height: 60,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: remoteImage
-                        ? Image.network(
-                            image,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                const Icon(Icons.article_outlined),
-                          )
-                        : type == 'simulation'
-                        ? Image.asset(
-                            index.isEven
-                                ? 'assets/images/news_flooded_home.jpg'
-                                : 'assets/images/news_flood_damage.jpg',
-                            fit: BoxFit.cover,
-                          )
-                        : const Icon(Icons.article_outlined),
-                  ),
-                ),
-                title: Text('${article['title'] ?? 'Informasi'}'),
-                subtitle: Text(
-                  '${article['summary'] ?? article['description'] ?? ''}\n${article['source'] ?? 'Sumber tidak dicantumkan'} · ${article['published_at'] ?? 'tanggal tidak tersedia'}',
-                ),
-                isThreeLine: true,
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => NewsDetailPage(
-                      article: article,
-                      simulation: type == 'simulation',
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }),
-      ],
+  void _openArticle(Map<String, dynamic> article) => Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => NewsDetailPage(
+        article: article,
+        simulation: type == 'simulation' || article['is_simulated'] == true,
+      ),
     ),
   );
+
+  @override
+  Widget build(BuildContext context) {
+    final pageCount = (articles.length / _pageSize).ceil();
+    final pageItems = articles
+        .skip((currentPage - 1) * _pageSize)
+        .take(_pageSize)
+        .toList();
+    final hero = articles.isNotEmpty
+        ? Map<String, dynamic>.from(articles.first as Map)
+        : null;
+    return RefreshIndicator(
+      onRefresh: load,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
+        children: [
+          const Text(
+            'Berita Terbaru',
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+          ),
+          if (type == 'simulation')
+            const Padding(padding: EdgeInsets.only(top: 8), child: DemoBadge()),
+          if (loading)
+            const _LoadingSkeleton(rows: 3)
+          else if (hero != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: _HomeNewsCard(
+                item: hero,
+                simulation:
+                    type == 'simulation' || hero['is_simulated'] == true,
+                onTap: () => _openArticle(hero),
+              ),
+            )
+          else
+            _EmptyState(
+              text: error ?? 'Belum tersedia berita kejadian terverifikasi.',
+            ),
+          const SizedBox(height: 18),
+          const Text(
+            'Semua Berita',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+          ),
+          if (!loading)
+            ...pageItems.asMap().entries.map((entry) {
+              final index = (currentPage - 1) * _pageSize + entry.key;
+              final article = Map<String, dynamic>.from(entry.value as Map);
+              final image = article['image_url'] ?? article['image'];
+              final remoteImage = image is String && image.startsWith('http');
+              final simulated =
+                  type == 'simulation' || article['is_simulated'] == true;
+              final date = article['published_at']?.toString();
+              final location = article['location']?.toString();
+              return Card(
+                child: ListTile(
+                  contentPadding: const EdgeInsets.all(10),
+                  leading: SizedBox(
+                    width: 72,
+                    height: 88,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: remoteImage
+                          ? Image.network(
+                              image,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) =>
+                                  const Icon(Icons.article_outlined),
+                            )
+                          : simulated
+                          ? Image.asset(
+                              index.isEven
+                                  ? 'assets/images/news_flooded_home.jpg'
+                                  : 'assets/images/news_flood_damage.jpg',
+                              fit: BoxFit.cover,
+                            )
+                          : const Icon(Icons.article_outlined),
+                    ),
+                  ),
+                  title: Text(
+                    '${article['title'] ?? 'Informasi'}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${article['summary'] ?? article['description'] ?? 'Ringkasan belum tersedia.'}',
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${date == null ? 'Tanggal belum tersedia' : date.split('T').first} · ${location?.isNotEmpty == true ? location : 'Lokasi tidak tersedia'}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                    ],
+                  ),
+                  isThreeLine: true,
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openArticle(article),
+                ),
+              );
+            }),
+          if (!loading && pageCount > 1) ...[
+            const SizedBox(height: 8),
+            _NewsPagination(
+              currentPage: currentPage,
+              pageCount: pageCount,
+              onSelected: (page) => setState(() => currentPage = page),
+            ),
+          ],
+          if (error != null && articles.isNotEmpty)
+            Text(error!, style: const TextStyle(color: Color(0xFF8B342D))),
+        ],
+      ),
+    );
+  }
+}
+
+class _NewsPagination extends StatelessWidget {
+  const _NewsPagination({
+    required this.currentPage,
+    required this.pageCount,
+    required this.onSelected,
+  });
+
+  final int currentPage;
+  final int pageCount;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final pages = <int>{
+      1,
+      currentPage - 1,
+      currentPage,
+      currentPage + 1,
+      pageCount,
+    }.where((page) => page >= 1 && page <= pageCount).toList()..sort();
+    final children = <Widget>[
+      IconButton(
+        tooltip: 'Halaman sebelumnya',
+        onPressed: currentPage > 1 ? () => onSelected(currentPage - 1) : null,
+        icon: const Icon(Icons.chevron_left),
+      ),
+    ];
+    var previous = 0;
+    for (final page in pages) {
+      if (previous > 0 && page - previous > 1) {
+        children.add(
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 2),
+            child: Text('…'),
+          ),
+        );
+      }
+      children.add(
+        Semantics(
+          button: true,
+          selected: page == currentPage,
+          label: 'Halaman $page',
+          child: TextButton(
+            onPressed: () => onSelected(page),
+            style: TextButton.styleFrom(
+              foregroundColor: page == currentPage
+                  ? Colors.white
+                  : const Color(0xFF01543F),
+              backgroundColor: page == currentPage
+                  ? const Color(0xFF01543F)
+                  : Colors.transparent,
+              minimumSize: const Size(34, 38),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            child: Text('$page'),
+          ),
+        ),
+      );
+      previous = page;
+    }
+    children.add(
+      IconButton(
+        tooltip: 'Halaman berikutnya',
+        onPressed: currentPage < pageCount
+            ? () => onSelected(currentPage + 1)
+            : null,
+        icon: const Icon(Icons.chevron_right),
+      ),
+    );
+    return Align(
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: children,
+      ),
+    );
+  }
 }
 
 class NewsDetailPage extends StatelessWidget {

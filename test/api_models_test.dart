@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -22,6 +23,18 @@ final class _TestPlatformFile extends PlatformFile {
 }
 
 void main() {
+  group('Weather condition icon mapping', () {
+    test('maps BMKG descriptions to matching weather icons', () {
+      expect(weatherIconForCondition('Cerah Berawan'), Icons.wb_cloudy_rounded);
+      expect(weatherIconForCondition('Hujan Ringan'), Icons.umbrella_rounded);
+      expect(
+        weatherIconForCondition('Hujan Petir'),
+        Icons.thunderstorm_rounded,
+      );
+      expect(weatherIconForCondition(null), Icons.cloud_outlined);
+    });
+  });
+
   group('API response models', () {
     test('parses an authenticated user profile', () {
       final user = UserProfile.fromJson({

@@ -263,3 +263,15 @@ Catatan ini melengkapi dan tidak menggantikan riwayat terdahulu di `IMPLEMENTATI
 - **File diubah tahap ini:** `lib/main.dart`, `test/feature_lifecycle_layout_test.dart`, `test/location_warning_test.dart`, dan dokumen status ini.
 - **Pengujian widget:** test baru memeriksa tab dan status terpilih pada 320×640 dan 360×740 dengan text scale 1,5. `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (43 test); `git diff --check` tidak menemukan whitespace error (Git hanya memberi peringatan konversi LF ke CRLF pada dokumen).
 - **Kendala/belum selesai:** layar Rute, Laporan, Donasi, dan Kontak masih mengikuti implementasi lama sampai tahap masing-masing. Build APK dan visual emulator belum dijalankan; ditangani pada Tahap 24. Karena `lib/main.dart` dan test telah memuat pekerjaan terdahulu yang belum di-commit dan dependensi foto profil pendukungnya belum terlacak, commit tahap ini juga akan mengamankan baseline tersebut agar source tetap buildable; artefak screenshot tidak disertakan.
+
+## Tahap 19 — Beranda, Berita, dan Cuaca (implementasi)
+
+**Tanggal:** 16 November 2026
+
+- **Beranda:** urutan berita hero, peringatan, deteksi banjir AI, Keluarga Siaga, dan cuaca mempertahankan satu respons API `home`; nilai suhu beranda tetap memakai payload yang sama dengan detail Cuaca. Peringatan `unknown` tetap ditampilkan sebagai belum diketahui.
+- **Berita:** halaman punya hero terbaru dan daftar Semua Berita ber-thumbnail, ringkasan maksimal empat baris, tanggal/lokasi bila tersedia, serta paginasi klien 5 item per halaman. Jumlah halaman dihitung dari jumlah data yang diterima; tidak ada nomor halaman tanpa item API. API Laravel mengembalikan maksimum 50 berita, tanpa parameter pagination.
+- **Cuaca:** kondisi prakiraan dipetakan ke ikon cerah, cerah berawan, berawan, hujan, petir, kabut, atau ikon netral sesuai deskripsi data. Layar menampilkan kelembapan udara dan kecepatan angin dari API, serta `Data belum tersedia` untuk kelembapan tanah yang tidak disediakan. Pencarian lokasi menjelaskan bahwa fitur belum tersedia saat tombol ditekan. Tile prakiraan harian hanya dibuat jika tanggal berbeda benar-benar ada dalam respons.
+- **File diubah:** `lib/main.dart`, `test/api_models_test.dart`, `test/feature_lifecycle_layout_test.dart`, dan dokumen ini.
+- **Test baru:** unit test mapping ikon; widget test pagination 320×640 text scale 1,5; widget test metrik cuaca dan pesan pencarian pada 320×640 dan 360×740 text scale 1,5.
+- **Belum selesai:** karena API forecast mobile membatasi hasil ke delapan interval dan mungkin belum melintasi hari berikutnya, daftar prakiraan mendatang dapat kosong dan ditampilkan sebagai belum tersedia. Data tanah dan pencarian lokasi belum disediakan. Build dan visual emulator dilakukan pada Tahap 24.
+- **Validasi:** `flutter analyze --no-pub` lulus tanpa temuan; `flutter test --no-pub` lulus (46 test); `git diff --check` tidak menemukan whitespace error (peringatan LF→CRLF pada `STATUS_IMPLEMENTASI.md` saja).

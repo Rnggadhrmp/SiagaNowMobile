@@ -62,6 +62,28 @@ ApiService _navigationApi() => ApiService(
   tokenReader: () async => null,
 );
 
+ApiService _newsPaginationApi() => ApiService(
+  const FlutterSecureStorage(),
+  client: MockClient((request) async {
+    final articles = List.generate(
+      12,
+      (index) => {
+        'id': index + 1,
+        'title': 'Berita ${index + 1}',
+        'summary': 'Ringkasan berita untuk uji pagination.',
+        'published_at': '2026-11-16T09:00:00+07:00',
+        'location': 'Padang',
+        'source': 'Sumber uji',
+      },
+    );
+    return http.Response(
+      jsonEncode({'data': articles, 'data_type': 'database'}),
+      200,
+    );
+  }),
+  tokenReader: () async => null,
+);
+
 ApiService _familyApi({int createStatus = 201}) {
   Map<String, dynamic>? family;
   return ApiService(
@@ -158,6 +180,118 @@ Future<void> _openFamily(WidgetTester tester, ApiService api) async {
 }
 
 void main() {
+  testWidgets('news pagination uses only pages backed by API data', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 640);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(
+          size: Size(320, 640),
+          textScaler: TextScaler.linear(1.5),
+        ),
+        child: MaterialApp(
+          home: Scaffold(body: NewsPage(api: _newsPaginationApi())),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Berita Terbaru'), findsOneWidget);
+    expect(find.text('Semua Berita'), findsOneWidget);
+    expect(find.text('Berita 1'), findsWidgets);
+    await tester.scrollUntilVisible(
+      find.text('3'),
+      420,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('3'), findsOneWidget);
+    expect(find.text('10'), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('2'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Berita 6'),
+      -420,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Berita 6'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('weather forecast tiles match conditions and fit small screens', (
+    tester,
+  ) async {
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final forecasts = [
+      WeatherPeriod(
+        localDateTime: '2026-11-16T09:00:00+07:00',
+        temperature: 28,
+        condition: 'Cerah Berawan',
+      ),
+      WeatherPeriod(
+        localDateTime: '2026-11-16T12:00:00+07:00',
+        temperature: 29,
+        condition: 'Hujan Ringan',
+      ),
+      WeatherPeriod(
+        localDateTime: '2026-11-16T15:00:00+07:00',
+        temperature: 26,
+        condition: 'Hujan Petir',
+      ),
+      WeatherPeriod(
+        localDateTime: '2026-11-17T09:00:00+07:00',
+        temperature: 27,
+        condition: 'Cerah',
+      ),
+    ];
+
+    for (final size in const [Size(320, 640), Size(360, 740)]) {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = size;
+      await tester.pumpWidget(
+        MediaQuery(
+          data: MediaQueryData(
+            size: size,
+            textScaler: const TextScaler.linear(1.5),
+          ),
+          child: MaterialApp(
+            home: WeatherDetailPage(
+              weather: {
+                'temperature': 28,
+                'condition': 'Cerah Berawan',
+                'location': 'Kota Padang',
+                'humidity': 82,
+                'wind_kmh': 8,
+                'source': 'BMKG',
+              },
+              forecasts: forecasts,
+              warning: {'status': 'unknown', 'active': false},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Data belum tersedia'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.byTooltip('Cari lokasi'));
+      await tester.pumpAndSettle();
+      expect(find.text('Pencarian lokasi belum tersedia.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   testWidgets(
     'five primary tabs stay readable and track selection on compact screens',
     (tester) async {
